@@ -10,6 +10,7 @@ param(
     [double]$Lng
 )
 $ErrorActionPreference = 'Stop'
+$Version = '1.0.0'
 $cfg   = 'HKCU:\Software\ThemeSwitch'
 $theme = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 $log   = Join-Path $PSScriptRoot 'themeswitch.log'
@@ -123,7 +124,7 @@ try {
         $lat = $Lat; $lng = $Lng
         $s = Get-State
         if ($Mode -eq 'status') {
-            "lat=$lat lng=$lng  now=$(if ($s.Day) { 'day' } else { 'night' })  next=$($s.Next)"
+            "ThemeSwitch v$Version  lat=$lat lng=$lng  now=$(if ($s.Day) { 'day' } else { 'night' })  next=$($s.Next)"
             "today: sunrise $(Get-SunTime (Get-Date) $true)  sunset $(Get-SunTime (Get-Date) $false)"
             return
         }
@@ -137,7 +138,7 @@ try {
         } finally {
             Register-Task $s.Next   # always re-arm, so a failed apply is retried at the next trigger
         }
-        $msg = "$Mode phase=$want applied=$($phase -ne $want) next=$($s.Next)"
+        $msg = "$Mode v$Version phase=$want applied=$($phase -ne $want) next=$($s.Next)"
     }
     if ($msg) { Write-Log $msg }
 } catch {

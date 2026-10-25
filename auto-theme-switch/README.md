@@ -43,7 +43,7 @@ Re-run `setup` if you move, or if you move/rename the script folder, since the t
 | `setup [-Lat -Lng]` | Saves location to `HKCU\Software\ThemeSwitch`, applies the current phase, registers the task |
 | `auto` | Default; run by the task. Applies the phase if changed and schedules the next transition |
 | `toggle` | Flips light/dark manually |
-| `status` | Prints computed sunrise/sunset and current phase; changes nothing |
+| `status` | Prints the version, computed sunrise/sunset and current phase; changes nothing |
 | `uninstall` | Removes the task, saved settings and log, and resets the theme to light |
 
 ## Manual toggle shortcut

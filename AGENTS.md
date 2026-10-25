@@ -24,8 +24,16 @@ Guidance for AI coding agents working in this repo. Utility-specific rules live 
 - Verify on a real Windows machine; this repo has no automated tests. Say what was and wasn't verified.
 - Do not leave test installs behind: uninstall, or restore the previous state.
 
+## Versioning
+
+- Each utility has its own semantic version, kept in one place in the utility (e.g. a `$Version` constant) and shown by its status/version output.
+- Bump it when behaviour changes: patch for fixes, minor for features, major for breaking changes (e.g. a `setup` re-run becoming mandatory).
+- Release by tagging `<utility>/vX.Y.Z` (e.g. `auto-theme-switch/v1.0.0`) on `main`.
+
 ## Git
 
-- Default branch is `main`. Use Conventional Commits (`feat:`, `fix:`, `docs:`).
+- `main` is the default and the only long-lived branch. Do non-trivial work on `feature/<utility>-<topic>` or `fix/<utility>-<topic>` branches and merge into `main` (PR or fast-forward); small docs fixes may go straight to `main`.
+- A change to one utility touches only its folder, plus its row in the root `README.md` when needed.
+- Use Conventional Commits with the utility as scope (`feat(auto-theme-switch): ...`, `docs: ...`).
 - Commit identity is the owner's GitHub noreply address; never change git identity or config.
-- Do not commit, push, or change GitHub repo settings unless asked.
+- Do not commit, push, tag, or change GitHub repo settings unless asked.

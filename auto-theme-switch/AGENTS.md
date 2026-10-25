@@ -20,6 +20,7 @@ A single PowerShell 5.1 script, `themeswitch.ps1`, that switches Windows between
 
 ## When changing the script
 
+- Bump `$Version` in `themeswitch.ps1` per the root versioning rules.
 - Update the command table, Requirements and Known limitations in `README.md` to match.
 - If a change alters the task's trigger set or action, re-run `setup` to re-register it.
 - Test with `status` first (changes nothing); restore your previous state after testing `setup`/`uninstall`.

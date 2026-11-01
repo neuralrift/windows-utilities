@@ -28,11 +28,11 @@ Guidance for AI coding agents working in this repo. Utility-specific rules live 
 
 - Each utility has its own semantic version, kept in one place in the utility (e.g. a `$Version` constant) and shown by its status/version output.
 - Bump it when behaviour changes: patch for fixes, minor for features, major for breaking changes (e.g. a `setup` re-run becoming mandatory).
-- Release by tagging `<utility>/vX.Y.Z` (e.g. `auto-theme-switch/v1.0.0`) on `main`.
+- Release by merging `dev` into `main` and tagging `<utility>/vX.Y.Z` (e.g. `auto-theme-switch/v1.0.0`) on that merge.
 
 ## Git
 
-- `main` is the default and the only long-lived branch. Do non-trivial work on `feature/<utility>-<topic>` or `fix/<utility>-<topic>` branches and merge into `main` (PR or fast-forward); small docs fixes may go straight to `main`.
+- The repo uses the two-branch workflow in [`docs/git-two-branch-workflow.md`](docs/git-two-branch-workflow.md), in solo mode; do Git operations through the git-clerk skill. `dev` is the default branch: do work on `feature/<utility>-<topic>` or `fix/<utility>-<topic>` branches from `dev` and fast-forward them into `dev`; small docs fixes may go straight to `dev`. `main` receives releases only.
 - A change to one utility touches only its folder, plus its row in the root `README.md` when needed.
 - Use Conventional Commits with the utility as scope (`feat(auto-theme-switch): ...`, `docs: ...`).
 - Commit identity is the owner's GitHub noreply address; never change git identity or config.

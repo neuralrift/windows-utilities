@@ -55,7 +55,8 @@ function t {
                 [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' '; Line = $n }
             }
             $items = @($items)
-            $memo  = if (Test-Path $LAST) { @([IO.File]::ReadAllLines($LAST)) } else { @() }
+            # @() around if: an if expression unrolls a one-element array into a bare string
+            $memo  = @(if (Test-Path $LAST) { [IO.File]::ReadAllLines($LAST) })
             $prevDay = if ($memo.Count) { $memo[0] } else { '' }
             $added = @($memo | Select-Object -Skip 1)
             $log   = @()
@@ -172,7 +173,7 @@ function t {
             if (-not $due.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
             $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
             $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
-            $lines = if ($due.Count -eq 1) { @($due[0]) } else { @("$($due.Count) tasks due", ($due -join ', ')) }
+            $lines = @(if ($due.Count -eq 1) { $due[0] } else { "$($due.Count) tasks due"; $due -join ', ' })
             $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
             $xml.LoadXml('<toast><visual><binding template="ToastGeneric">' + (($lines | ForEach-Object { "<text>$([Security.SecurityElement]::Escape($_))</text>" }) -join '') + '</binding></visual></toast>')
             $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
@@ -219,7 +220,7 @@ function t {
             $hasPwsh = [bool](Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue)
             foreach ($p in $profs) {
                 if ($p -eq $profs[1] -and -not $hasPwsh -and -not (Test-Path (Split-Path $p))) { continue }
-                $lines = if (Test-Path $p) { @([IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) }) } else { @() }
+                $lines = @(if (Test-Path $p) { [IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) } })
                 New-Item (Split-Path $p) -ItemType Directory -Force | Out-Null
                 [IO.File]::WriteAllLines($p, [string[]]($lines + $line), (New-Object Text.UTF8Encoding $true))
                 Write-Host "Profile: $p"

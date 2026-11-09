@@ -40,6 +40,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
   - keep `t.ps1` pure ASCII (PS 5.1 misreads UTF-8 without a BOM); write other characters as `[char]0x....`
   - read and write data with `[IO.File]::ReadAllLines`/`WriteAllLines`/`AppendAllText`, not `Set-Content`/`Out-File`
   - use full parameter names, and wrap filtered results in `@()`
+  - wrap an `if` that yields lines in `@()` as well (`$x = @(if (...) { ReadAllLines(...) })`): an `if` expression unrolls a one-element array into a bare string, so `$x[0]` becomes its first character
 - No dependencies: only built-in PowerShell and .NET.
 - Bump `$OneTaskVersion` per the root versioning rules, and update the command table and Known limitations in `README.md`.
 

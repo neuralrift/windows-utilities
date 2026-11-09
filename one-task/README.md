@@ -50,12 +50,13 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t list` | Shows all tasks, numbered |
 | `t edit` | Opens `todo.txt` in Notepad |
 | `t routine` | Opens `routine.txt` in Notepad |
+| `t merge` | Merges OneDrive conflict copies, after confirmation (see below) |
 | `t setup` | See Setup |
 | `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
 
 `t remind` is run by the reminder task; you don't need it.
 
-`list`, `edit`, `routine`, `remind`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
+`list`, `edit`, `routine`, `remind`, `merge`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
 
 ## Daily routine
 
@@ -86,6 +87,17 @@ Each run puts the due timed tasks at the top of `todo.txt` and shows one notific
 
 The task is armed by the first `t` after `setup`, and again by the first `t` after `routine.txt` changes, which takes about a second once. Do Not Disturb holds the notifications as usual.
 
+## Conflict copies
+
+If two PCs change the same file before OneDrive syncs, OneDrive keeps both and saves one as a copy such as `todo-<PC>.txt`. `t` and `t list` then print a one-line notice; capture (`t <text>`) never does. `t merge` shows what it will do and asks first:
+
+- `todo-<PC>.txt`: its tasks that are not already in `todo.txt` go to the bottom. It skips tasks logged in `done.txt` from a week before the copy onwards, so finished tasks don't come back, and routine tasks, which the routine adds itself.
+- `done-<PC>.txt`: its lines that are not already in `done.txt` are appended.
+- `routine-<PC>.last`: deleted; it is the tool's own state.
+- `routine-<PC>.txt`: not merged. Compare it with `t routine` and delete it yourself.
+
+Merged copies are deleted (they go to the OneDrive recycle bin).
+
 ## Uninstall
 
 ```powershell
@@ -106,6 +118,6 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 - **PowerShell syntax in tasks:** characters such as `;`, `#`, `|`, `&`, `(` and `$` are interpreted by PowerShell. Quote the task (`t 'pay rent; call bank'`) or use `t edit`.
 - **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a OneDrive sync). The confirmation shows the tasks before anything is logged.
 - **Several PCs:** if Documents is synced by OneDrive, the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC.
-- **OneDrive conflicts:** editing on two PCs while offline can make OneDrive save a conflict copy such as `todo-<PC>.txt`; merge it by hand for now.
+- **Merging is by text:** a task changed on both PCs comes back as two tasks; a task finished more than a week before the copy was written can come back. Both show in the confirmation before anything changes.
 - **Group Policy:** an execution policy set by Group Policy cannot be changed by `setup`; it reports this instead.
 - **`done.txt` grows** by one short line per finished task and is never pruned; it is your record.

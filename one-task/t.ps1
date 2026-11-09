@@ -1,6 +1,6 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> | t done [n ...|text] | t skip | t now <task> | t split <a> / <b>
-#        t list | t edit | t routine | t setup | t uninstall   (t remind is run by the scheduled task)
+#        t list | t edit | t routine | t merge | t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Root,
@@ -17,7 +17,7 @@ function t {
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'merge', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
 
     $dir   = if ($OneTaskRoot) { Join-Path $OneTaskRoot 'Apps\one-task' } else { '' }
     $TODO  = Join-Path "$dir\" 'todo.txt'
@@ -112,12 +112,16 @@ function t {
                 Set-ItemProperty $key Stamp $stamp
             }
         }
+
+        # OneDrive saves conflicting edits as copies such as todo-<PC>.txt; t and t list mention them, t merge merges them
+        $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)-.+\.(txt|last)$' } })
     }
 
     switch ($cmd) {
         '' {
             if ($tasks.Count) { Write-Host "$([char]0x25B6) $($tasks[0])" -ForegroundColor Cyan }
             else { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
+            if ($copies.Count) { Write-Host 'OneDrive saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
         }
         'done' {
@@ -160,7 +164,39 @@ function t {
         'list' {
             if (-not $tasks.Count) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray; return }
             for ($i = 0; $i -lt $tasks.Count; $i++) { Write-Host "$($i + 1). $($tasks[$i])" -ForegroundColor $(if ($i) { 'Gray' } else { 'Cyan' }) }
+            if ($copies.Count) { Write-Host 'OneDrive saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
+        }
+        'merge' {
+            if (-not $copies.Count) { Write-Host 'No conflict copies.' -ForegroundColor DarkGray; return }
+            $doneLines = @(if (Test-Path $DONE) { [IO.File]::ReadAllLines($DONE) })
+            $newTasks = @(); $newDone = @(); $drop = @()
+            foreach ($c in $copies) {
+                $lines = @([IO.File]::ReadAllLines($c.FullName) | Where-Object { $_.Trim() })
+                switch -Regex ($c.Name) {
+                    '^todo-' {
+                        # Skip tasks finished (or missed) since a week before the copy was written, so they are not
+                        # brought back, and routine tasks, which the routine adds itself
+                        $since = $c.LastWriteTime.AddDays(-7).ToString('yyyy-MM-dd')
+                        $gone = @($doneLines | Where-Object { $_.Length -gt 11 -and $_.Substring(0, 10) -ge $since } | ForEach-Object { $_.Substring(11) -replace '^missed: ', '' })
+                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and @($items).Text -notcontains $_ })
+                        $drop += $c
+                    }
+                    '^done-' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
+                    '\.last$' { $drop += $c }   # the tool's own state; the main routine.last wins
+                    default { Write-Host "$($c.Name): compare it with routine.txt (t routine), then delete it." -ForegroundColor Yellow }
+                }
+            }
+            if (-not $drop.Count) { return }
+            $newTasks = @($newTasks | Select-Object -Unique)
+            $newDone  = @($newDone | Select-Object -Unique)
+            if ($newTasks.Count) { Write-Host 'Add to the bottom of todo.txt:'; $newTasks | ForEach-Object { Write-Host "  $_" } }
+            if ($newDone.Count) { Write-Host "Add $($newDone.Count) line(s) to done.txt" }
+            Write-Host "Then delete: $(($drop | ForEach-Object { $_.Name }) -join ', ')"
+            if ((Read-Host 'Merge? [y/N]') -ne 'y') { return }
+            if ($newDone.Count) { [IO.File]::AppendAllText($DONE, ($newDone -join "`r`n") + "`r`n") }
+            $drop | Remove-Item
+            $tasks += $newTasks
         }
         'edit' { notepad $TODO; return }
         'routine' {

@@ -1,0 +1,71 @@
+# One Task
+
+A terminal todo that shows **one task**: the one that matters now. Every new terminal shows it; nothing in normal use shows the whole list. One PowerShell script, no dependencies, plain-text data synced by OneDrive.
+
+## How it works
+
+- The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task.
+- Tasks live in `OneDrive\Apps\one-task\`:
+  - `todo.txt`: one task per line, line 1 is the current task. Edit it in Notepad or on your phone; blank lines are ignored.
+  - `done.txt`: a log of `YYYY-MM-DD task` lines. Nothing reads it back.
+- Sync between PCs is OneDrive's job; the tool has no sync code, network calls or accounts.
+
+## Requirements
+
+- Windows 11 with the built-in Windows PowerShell 5.1; PowerShell 7 is supported too.
+- OneDrive (personal or work), or any folder you pass with `-Root`.
+- An execution policy that lets your profile run local scripts (`RemoteSigned`). `setup` sets this for the current user if needed.
+
+## Setup (once, no elevation needed)
+
+Clone or download the repo, then run from the `one-task` folder in Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File t.ps1 setup
+```
+
+`setup`:
+
+- asks which OneDrive to use when you have both a personal and a work one (or pass `-Root <folder>`)
+- creates `Apps\one-task\` there, and offers to move a `todo.txt`/`done.txt` it finds in the OneDrive root
+- adds one line, marked `# one-task`, to the all-hosts profile (`profile.ps1`) of Windows PowerShell and, if installed, PowerShell 7, so it also works in VS Code's terminal
+- sets the CurrentUser execution policy to `RemoteSigned` only if the current one would block the profile, and remembers the old value in `HKCU\Software\OneTask`
+
+Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo folder.
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `t` | Shows the current task |
+| `t <text>` | Parks a task at the bottom; never asks anything |
+| `t done` | Logs the current task to `done.txt` and shows the next one |
+| `t done 2 4` | Logs tasks 2 and 4 (numbers from `t list`), after confirmation |
+| `t done <text>` | Logs the one task containing the text, after confirmation; if several match, prints them with their numbers |
+| `t skip` | Moves the current task to the bottom |
+| `t now <text>` | Puts a task at the top (for interruptions) |
+| `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b` |
+| `t list` | Shows all tasks, numbered |
+| `t edit` | Opens `todo.txt` in Notepad |
+| `t setup` | See Setup |
+| `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
+
+`list`, `edit`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
+
+## Uninstall
+
+```powershell
+t uninstall
+```
+
+Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty), restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Your `todo.txt` and `done.txt` are kept on purpose; delete `OneDrive\Apps\one-task` yourself if you no longer want them.
+
+## Known limitations
+
+- **Reserved first words:** a task cannot start with `done`, `now` or `split`, nor be exactly `list`, `edit`, `skip`, `setup` or `uninstall`.
+- **PowerShell syntax in tasks:** characters such as `;`, `#`, `|`, `&`, `(` and `$` are interpreted by PowerShell. Quote the task (`t 'pay rent; call bank'`) or use `t edit`.
+- **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a OneDrive sync). The confirmation shows the tasks before anything is logged.
+- **Several PCs:** if Documents is synced by OneDrive, the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC.
+- **OneDrive conflicts:** editing on two PCs while offline can make OneDrive save a conflict copy such as `todo-<PC>.txt`; merge it by hand for now.
+- **Group Policy:** an execution policy set by Group Policy cannot be changed by `setup`; it reports this instead.
+- **`done.txt` grows** by one short line per finished task and is never pruned; it is your record.

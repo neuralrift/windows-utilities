@@ -11,7 +11,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 1. **One task visible.** Bare `t` prints only the first task. `t list` and `t edit` are the only deliberate ways to see all tasks.
 2. **Plain text.** `todo.txt` is one task per line, line 1 is the current task. No metadata, syntax, JSON or database; it must stay editable in Notepad or on a phone. Blank lines are ignored. The format is frozen: an existing `todo.txt` must stay readable as-is.
 3. **Capture without interruption.** `t <text>` appends to the bottom and prints `parked.`. It never shows the list and never asks a question.
-4. **Done is a log.** `t done` appends `YYYY-MM-DD task` to `done.txt`. Nothing reads it back.
+4. **Done is a log.** `t done` appends `YYYY-MM-DD task` to `done.txt`, and the routine appends `YYYY-MM-DD missed: task`. Nothing reads it back.
 5. **Sync is the file system.** Data lives in `OneDrive\Apps\one-task\`, never in this repo. No sync code, network calls, accounts or servers.
 6. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t`.
 7. **Confirm before guessing.** `t done <n>` and `t done <text>` show what they will log and ask first; bare `t done` does not.
@@ -25,6 +25,10 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 - `uninstall` removes the marked lines and the registry key, and keeps the task data.
 - Commands that take no text (`list`, `edit`, `skip`, `setup`, `uninstall`) only match when typed alone.
 - `split` separates steps with ` / `, because `;` is a PowerShell statement separator.
+- Routine: `routine.txt` is user-edited plain text (`[days] [HH:MM] task`, `#` comments). `routine.last` is the tool's state: line 1 is the last routine day, then the routine tasks added on it. Routine work runs at the start of every `t` call, so it must stay plain file IO, and it writes only when something changes.
+- Routine tasks are identified by their text; on a new day, the previous day's added tasks still in `todo.txt` are removed and logged as missed. Backfilled missed days are capped at 31.
+- `$OneTaskNow`, if set in the session, replaces the clock; it exists for tests.
+- PowerShell variable names are case-insensitive: don't reuse a name such as `$TODO`/`$todo` for two things.
 
 ## Rules for changes
 
@@ -53,5 +57,7 @@ t done 9                # -> "No such task number"
 t done report           # -> lists both "write report" steps, logs nothing
 t done 2                # answer y -> logs "write report: b"
 ```
+
+For the routine, write a `routine.txt` with untimed, `weekdays`, `sat,sun HH:MM` and single-word lines, then step `$OneTaskNow` through: a weekday morning, the same day after a timed task (added once only), the next day (yesterday's leftovers logged as missed), a jump over skipped days (each logged), and a weekend day. Check `todo.txt`, `done.txt` and `routine.last` after each step.
 
 For `setup`/`uninstall`, pass `-Root <temp>`, check both `profile.ps1` files, and confirm `uninstall` leaves profiles, policy and `HKCU\Software\OneTask` as they were.

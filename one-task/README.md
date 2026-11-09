@@ -7,7 +7,8 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 - The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task.
 - Tasks live in `OneDrive\Apps\one-task\`:
   - `todo.txt`: one task per line, line 1 is the current task. Edit it in Notepad or on your phone; blank lines are ignored.
-  - `done.txt`: a log of `YYYY-MM-DD task` lines. Nothing reads it back.
+  - `done.txt`: a log of `YYYY-MM-DD task` lines, and `YYYY-MM-DD missed: task` for routine tasks left undone. Nothing reads it back.
+  - `routine.txt`: your daily routine (see below). `routine.last` is the tool's own record of the current routine day; leave it alone.
 - Sync between PCs is OneDrive's job; the tool has no sync code, network calls or accounts.
 
 ## Requirements
@@ -27,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File t.ps1 setup
 `setup`:
 
 - asks which OneDrive to use when you have both a personal and a work one (or pass `-Root <folder>`)
-- creates `Apps\one-task\` there, and offers to move a `todo.txt`/`done.txt` it finds in the OneDrive root
+- creates `Apps\one-task\` there with a commented `routine.txt` template, and offers to move a `todo.txt`/`done.txt` it finds in the OneDrive root
 - adds one line, marked `# one-task`, to the all-hosts profile (`profile.ps1`) of Windows PowerShell and, if installed, PowerShell 7, so it also works in VS Code's terminal
 - sets the CurrentUser execution policy to `RemoteSigned` only if the current one would block the profile, and remembers the old value in `HKCU\Software\OneTask`
 
@@ -47,10 +48,28 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b` |
 | `t list` | Shows all tasks, numbered |
 | `t edit` | Opens `todo.txt` in Notepad |
+| `t routine` | Opens `routine.txt` in Notepad |
 | `t setup` | See Setup |
 | `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
 
-`list`, `edit`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
+`list`, `edit`, `routine`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
+
+## Daily routine
+
+`routine.txt` holds tasks you do regularly, one per line. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
+
+| Line | Added |
+|---|---|
+| `review inbox` | Every day, in the morning |
+| `weekdays standup prep` | Monday to Friday, in the morning |
+| `weekends gym` | Saturday and Sunday, in the morning |
+| `weekdays 14:00 timesheet` | Monday to Friday, at 14:00 |
+| `mon,thu 17:00 call supplier` | Monday and Thursday, at 17:00 |
+
+- On the first `t` of a day, untimed routine tasks for that day go to the top of `todo.txt`, in file order.
+- A timed task goes to the top on the first `t` at or after its time.
+- Each day starts fresh: routine tasks from the previous day that are still in `todo.txt` are removed and logged as `YYYY-MM-DD missed: task` in `done.txt`. So are timed tasks whose time never came up in a terminal, and every routine task of days on which `t` never ran (up to the last 31 days).
+- A routine task already in `todo.txt` is not added twice.
 
 ## Uninstall
 
@@ -58,11 +77,15 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 t uninstall
 ```
 
-Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty), restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Your `todo.txt` and `done.txt` are kept on purpose; delete `OneDrive\Apps\one-task` yourself if you no longer want them.
+Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty), restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Your `todo.txt`, `done.txt` and `routine.txt` are kept on purpose; delete `OneDrive\Apps\one-task` yourself if you no longer want them.
 
 ## Known limitations
 
-- **Reserved first words:** a task cannot start with `done`, `now` or `split`, nor be exactly `list`, `edit`, `skip`, `setup` or `uninstall`.
+- **Reserved first words:** a task cannot start with `done`, `now` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `setup` or `uninstall`.
+- **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, and `HH:MM` as a time. A routine task that should start with such a word cannot.
+- **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
+- **No reminders yet:** a timed task appears only when you next run `t` (or open a terminal) after its time.
+- **Two PCs on the same day:** if both start a new routine day before OneDrive syncs, `done.txt` can get duplicate `missed:` lines.
 - **PowerShell syntax in tasks:** characters such as `;`, `#`, `|`, `&`, `(` and `$` are interpreted by PowerShell. Quote the task (`t 'pay rent; call bank'`) or use `t edit`.
 - **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a OneDrive sync). The confirmation shows the tasks before anything is logged.
 - **Several PCs:** if Documents is synced by OneDrive, the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC.

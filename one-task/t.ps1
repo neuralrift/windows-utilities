@@ -1,6 +1,6 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> | t done [n ...|text] | t skip | t now <task> | t split <a> / <b>
-#        t list | t edit | t setup | t uninstall
+#        t list | t edit | t routine | t setup | t uninstall
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Root,
@@ -17,7 +17,7 @@ function t {
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
 
     $dir   = if ($OneTaskRoot) { Join-Path $OneTaskRoot 'Apps\one-task' } else { '' }
     $TODO  = Join-Path "$dir\" 'todo.txt'
@@ -25,11 +25,64 @@ function t {
     $docs  = [Environment]::GetFolderPath('MyDocuments')
     $profs = @("$docs\WindowsPowerShell\profile.ps1", "$docs\PowerShell\profile.ps1")
     $key   = 'HKCU:\Software\OneTask'
+    $now   = if ($OneTaskNow) { [datetime]$OneTaskNow } else { Get-Date }   # $OneTaskNow fakes the clock in tests
+    $day   = $now.ToString('yyyy-MM-dd')
 
     if ($cmd -notin 'setup', 'uninstall') {
         if (-not $dir) { Write-Host 'No OneDrive folder found. Run: t setup' -ForegroundColor Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
         $tasks = @([IO.File]::ReadAllLines($TODO) | Where-Object { $_.Trim() })
+
+        # Routine: on a new day, log yesterday's unfinished routine tasks as missed and add today's;
+        # timed ones are added at the top on the first t at or after their time.
+        # routine.last holds the date of the last routine day, then the tasks added on it.
+        $ROUTINE = Join-Path $dir 'routine.txt'
+        $LAST    = Join-Path $dir 'routine.last'   # PowerShell names are case-insensitive: no other $last/$state below
+        if (Test-Path $ROUTINE) {
+            $names = @{ sun = 0; mon = 1; tue = 2; wed = 3; thu = 4; fri = 5; sat = 6 }
+            $items = foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) {
+                $w = @($l.Trim() -split '\s+')
+                if (-not $l.Trim() -or $w[0].StartsWith('#')) { continue }
+                $days = 0..6; $at = $null
+                if ($w.Count -gt 1 -and $w[0] -match '^(daily|weekdays|weekends|((sun|mon|tue|wed|thu|fri|sat),?)+)$') {
+                    $days = switch ($w[0]) { 'daily' { 0..6 } 'weekdays' { 1..5 } 'weekends' { 0, 6 } default { @($w[0] -split ',' | Where-Object { $_ } | ForEach-Object { $names[$_] }) } }
+                    $w = @($w | Select-Object -Skip 1)
+                }
+                if ($w.Count -gt 1 -and $w[0] -match '^([01]?\d|2[0-3]):[0-5]\d$') { $at = [timespan]$w[0]; $w = @($w | Select-Object -Skip 1) }
+                [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' ' }
+            }
+            $items = @($items)
+            $memo  = if (Test-Path $LAST) { @([IO.File]::ReadAllLines($LAST)) } else { @() }
+            $prevDay = if ($memo.Count) { $memo[0] } else { '' }
+            $added = @($memo | Select-Object -Skip 1)
+            $log   = @()
+            $newDay = $prevDay -lt $day
+            if ($newDay) {
+                if ($prevDay) {
+                    $prev = [datetime]::ParseExact($prevDay, 'yyyy-MM-dd', $null)
+                    foreach ($t in $added) { if ($tasks -contains $t) { $log += "$prevDay missed: $t" } }
+                    $tasks = @($tasks | Where-Object { $added -notcontains $_ })
+                    foreach ($r in $items) { if ($r.At -and $r.Days -contains [int]$prev.DayOfWeek -and $added -notcontains $r.Text) { $log += "$prevDay missed: $($r.Text)" } }
+                    # Days without any t run (PC off), at most the last 31
+                    $from = $prev.AddDays(1)
+                    if ($from -lt $now.Date.AddDays(-31)) { $from = $now.Date.AddDays(-31) }
+                    for ($x = $from; $x -lt $now.Date; $x = $x.AddDays(1)) {
+                        foreach ($r in $items) { if ($r.Days -contains [int]$x.DayOfWeek) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $($r.Text)" } }
+                    }
+                }
+                $added = @($items | Where-Object { -not $_.At -and $_.Days -contains [int]$now.DayOfWeek -and $tasks -notcontains $_.Text } | ForEach-Object { $_.Text })
+                $tasks = $added + $tasks
+            }
+            $due = @($items | Where-Object { $_.At -and $_.At -le $now.TimeOfDay -and $_.Days -contains [int]$now.DayOfWeek -and $added -notcontains $_.Text -and $tasks -notcontains $_.Text } |
+                Sort-Object At | ForEach-Object { $_.Text })
+            if ($newDay -or $due.Count) {
+                $tasks = $due + $tasks
+                $added += $due
+                if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
+                [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
+                [IO.File]::WriteAllLines($LAST, [string[]](@($day) + $added))
+            }
+        }
     }
 
     switch ($cmd) {
@@ -58,7 +111,6 @@ function t {
                 $pick | ForEach-Object { Write-Host "  $($tasks[$_])" }
                 if ((Read-Host 'Mark done? [y/N]') -ne 'y') { return }
             }
-            $day = Get-Date -Format yyyy-MM-dd
             $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day $($tasks[$_])`r`n") }
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
@@ -82,6 +134,10 @@ function t {
             return
         }
         'edit' { notepad $TODO; return }
+        'routine' {
+            if (-not (Test-Path $ROUTINE)) { Write-Host 'No routine.txt yet. Run: t setup' -ForegroundColor Yellow; return }
+            notepad $ROUTINE; return
+        }
         'setup' {
             # A -Root passed on the command line or by the profile line wins; otherwise ask when there are several OneDrives
             $base = $Root
@@ -100,6 +156,17 @@ function t {
             foreach ($f in 'todo.txt', 'done.txt') {
                 $old = Join-Path $base $f
                 if ((Test-Path $old) -and -not (Test-Path (Join-Path $dir $f)) -and (Read-Host "Move $old to $dir? [y/N]") -eq 'y') { Move-Item $old $dir }
+            }
+            $r = Join-Path $dir 'routine.txt'
+            if (-not (Test-Path $r)) {
+                [IO.File]::WriteAllLines($r, [string[]]@(
+                    '# Routine: one task per line, added to your list every day. Lines starting with # are ignored.'
+                    '# Optional prefixes: weekdays, weekends, or days such as mon,thu; then a time (HH:MM)'
+                    '# to add the task at that time instead of in the morning. Examples:'
+                    '#   review inbox'
+                    '#   weekdays standup prep'
+                    '#   weekdays 14:00 timesheet'
+                    '#   mon,thu 17:00 call supplier'))
             }
 
             # Profiles may sync between PCs through OneDrive, so the line is skipped where the script path does not exist

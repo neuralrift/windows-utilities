@@ -1,6 +1,6 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> | t done [n ...|text] | t skip | t now <task> | t split <a> / <b>
-#        t list | t edit | t routine | t setup | t uninstall
+#        t list | t edit | t routine | t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Root,
@@ -17,7 +17,7 @@ function t {
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
 
     $dir   = if ($OneTaskRoot) { Join-Path $OneTaskRoot 'Apps\one-task' } else { '' }
     $TODO  = Join-Path "$dir\" 'todo.txt'
@@ -38,9 +38,12 @@ function t {
         # routine.last holds the date of the last routine day, then the tasks added on it.
         $ROUTINE = Join-Path $dir 'routine.txt'
         $LAST    = Join-Path $dir 'routine.last'   # PowerShell names are case-insensitive: no other $last/$state below
+        $due     = @()
         if (Test-Path $ROUTINE) {
             $names = @{ sun = 0; mon = 1; tue = 2; wed = 3; thu = 4; fri = 5; sat = 6 }
+            $n = 0
             $items = foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) {
+                $n++
                 $w = @($l.Trim() -split '\s+')
                 if (-not $l.Trim() -or $w[0].StartsWith('#')) { continue }
                 $days = 0..6; $at = $null
@@ -49,7 +52,7 @@ function t {
                     $w = @($w | Select-Object -Skip 1)
                 }
                 if ($w.Count -gt 1 -and $w[0] -match '^([01]?\d|2[0-3]):[0-5]\d$') { $at = [timespan]$w[0]; $w = @($w | Select-Object -Skip 1) }
-                [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' ' }
+                [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' '; Line = $n }
             }
             $items = @($items)
             $memo  = if (Test-Path $LAST) { @([IO.File]::ReadAllLines($LAST)) } else { @() }
@@ -74,13 +77,38 @@ function t {
                 $tasks = $added + $tasks
             }
             $due = @($items | Where-Object { $_.At -and $_.At -le $now.TimeOfDay -and $_.Days -contains [int]$now.DayOfWeek -and $added -notcontains $_.Text -and $tasks -notcontains $_.Text } |
-                Sort-Object At | ForEach-Object { $_.Text })
+                Sort-Object At, Line | ForEach-Object { $_.Text })
             if ($newDay -or $due.Count) {
                 $tasks = $due + $tasks
                 $added += $due
                 if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
                 [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
                 [IO.File]::WriteAllLines($LAST, [string[]](@($day) + $added))
+            }
+
+            # Reminders: one scheduled task, re-armed for the next timed routine task after every
+            # reminder run and whenever routine.txt changes. Setup creates $key; without it nothing is armed.
+            $stamp = "$((Get-Item $ROUTINE).LastWriteTimeUtc.Ticks)"
+            if ((Test-Path $key) -and ($cmd -eq 'remind' -or (Get-ItemProperty $key).Stamp -ne $stamp)) {
+                $next = $null
+                for ($x = 0; $x -le 7 -and -not $next; $x++) {
+                    $d = $now.Date.AddDays($x)
+                    $next = @($items | Where-Object { $_.At -and $_.Days -contains [int]$d.DayOfWeek -and $d + $_.At -gt $now } | ForEach-Object { $d + $_.At } | Sort-Object) | Select-Object -First 1
+                }
+                $user   = "$env:USERDOMAIN\$env:USERNAME"
+                $resume = New-CimInstance -CimClass (Get-CimClass MSFT_TaskEventTrigger root/Microsoft/Windows/TaskScheduler) -ClientOnly -Property @{
+                    Enabled      = $true
+                    Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-Power-Troubleshooter''] and EventID=1]]</Select></Query></QueryList>'
+                }
+                $trig = @((New-ScheduledTaskTrigger -AtLogOn -User $user), $resume)
+                if ($next) { $trig += New-ScheduledTaskTrigger -Once -At $next }
+                # Always Windows PowerShell: toasts need WinRT, which PowerShell 7 lacks
+                Register-ScheduledTask OneTask -Force `
+                    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$OneTaskScript`" -Root `"$OneTaskRoot`" remind") `
+                    -Trigger $trig `
+                    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) `
+                    -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited) | Out-Null
+                Set-ItemProperty $key Stamp $stamp
             }
         }
     }
@@ -138,6 +166,19 @@ function t {
             if (-not (Test-Path $ROUTINE)) { Write-Host 'No routine.txt yet. Run: t setup' -ForegroundColor Yellow; return }
             notepad $ROUTINE; return
         }
+        'remind' {
+            # Run by the OneTask scheduled task. The routine code above has already put due tasks on top
+            # and re-armed the task; this shows them, batched into one toast (several after a wake).
+            if (-not $due.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
+            $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+            $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+            $lines = if ($due.Count -eq 1) { @($due[0]) } else { @("$($due.Count) tasks due", ($due -join ', ')) }
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml('<toast><visual><binding template="ToastGeneric">' + (($lines | ForEach-Object { "<text>$([Security.SecurityElement]::Escape($_))</text>" }) -join '') + '</binding></visual></toast>')
+            $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+            return
+        }
         'setup' {
             # A -Root passed on the command line or by the profile line wins; otherwise ask when there are several OneDrives
             $base = $Root
@@ -168,6 +209,9 @@ function t {
                     '#   weekdays 14:00 timesheet'
                     '#   mon,thu 17:00 call supplier'))
             }
+            # The next t arms the reminder task once this key exists and its Stamp differs from routine.txt
+            if (-not (Test-Path $key)) { New-Item $key | Out-Null }
+            Set-ItemProperty $key Stamp ''
 
             # Profiles may sync between PCs through OneDrive, so the line is skipped where the script path does not exist
             $s = $OneTaskScript.Replace("'", "''")
@@ -192,7 +236,6 @@ function t {
             if ($eff -in 'Restricted', 'AllSigned') {
                 if ($gpo.Count) { Write-Host "Group Policy sets the execution policy to $eff, so the profile cannot load t." -ForegroundColor Yellow }
                 else {
-                    New-Item $key -Force | Out-Null
                     Set-ItemProperty $key PrevPolicy $user
                     Set-ItemProperty $key Edition $PSVersionTable.PSEdition
                     # Errors when the Process scope overrides it (as with -ExecutionPolicy Bypass); checked below instead
@@ -212,11 +255,12 @@ function t {
                 else { Remove-Item $p }
                 Write-Host "Profile cleaned: $p"
             }
+            if (Get-ScheduledTask OneTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask OneTask -Confirm:$false; Write-Host 'Reminder task removed' }
             if (Test-Path $key) {
                 $k = Get-ItemProperty $key
-                if ($k.Edition -ne $PSVersionTable.PSEdition) { Write-Host "Run uninstall from the shell that ran setup ($($k.Edition) edition) to restore the execution policy." -ForegroundColor Yellow; return }
+                if ($k.PrevPolicy -and $k.Edition -ne $PSVersionTable.PSEdition) { Write-Host "Run uninstall from the shell that ran setup ($($k.Edition) edition) to restore the execution policy." -ForegroundColor Yellow; return }
                 # Only restore if nobody changed it since setup
-                if ("$(Get-ExecutionPolicy -Scope CurrentUser)" -eq 'RemoteSigned') {
+                if ($k.PrevPolicy -and "$(Get-ExecutionPolicy -Scope CurrentUser)" -eq 'RemoteSigned') {
                     try { Set-ExecutionPolicy $k.PrevPolicy -Scope CurrentUser -Force -ErrorAction Stop } catch { }
                     Write-Host "Execution policy (CurrentUser) restored to $($k.PrevPolicy)"
                 }

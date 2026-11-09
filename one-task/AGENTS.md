@@ -23,10 +23,14 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 - `setup` writes one line ending in `# one-task` to the all-hosts `profile.ps1` of each installed edition (Documents via `GetFolderPath('MyDocuments')`). The line carries `-Root`, the chosen OneDrive, and is guarded by `Test-Path` because profiles may sync between PCs.
 - `setup` changes the CurrentUser execution policy only when it would block the profile, and saves the old value and edition in `HKCU\Software\OneTask`. `uninstall` restores it only if it is still `RemoteSigned`.
 - `uninstall` removes the marked lines and the registry key, and keeps the task data.
-- Commands that take no text (`list`, `edit`, `skip`, `setup`, `uninstall`) only match when typed alone.
+- Commands that take no text (`list`, `edit`, `routine`, `remind`, `skip`, `setup`, `uninstall`) only match when typed alone.
 - `split` separates steps with ` / `, because `;` is a PowerShell statement separator.
 - Routine: `routine.txt` is user-edited plain text (`[days] [HH:MM] task`, `#` comments). `routine.last` is the tool's state: line 1 is the last routine day, then the routine tasks added on it. Routine work runs at the start of every `t` call, so it must stay plain file IO, and it writes only when something changes.
 - Routine tasks are identified by their text; on a new day, the previous day's added tasks still in `todo.txt` are removed and logged as missed. Backfilled missed days are capped at 31.
+- Reminders: one scheduled task, `OneTask`, runs `conhost.exe --headless powershell.exe ... t.ps1 -Root <root> remind`, always on Windows PowerShell because toasts use WinRT, which PowerShell 7 lacks. Its triggers are a one-shot at the next timed routine task (up to 7 days ahead), logon, and resume from sleep (Power-Troubleshooter event 1), as in `auto-theme-switch`.
+- The task is re-registered only by a `remind` run or when `routine.txt`'s write time differs from `Stamp` in `HKCU\Software\OneTask`, so a normal `t` stays fast. Nothing is armed unless setup has created that key.
+- `remind` shows one toast for all tasks the routine code just made due (`$due`), so a wake after several due times gives one batched toast.
+- `uninstall` unregisters the task and deletes the key; the policy restore runs only if the key holds `PrevPolicy`.
 - `$OneTaskNow`, if set in the session, replaces the clock; it exists for tests.
 - PowerShell variable names are case-insensitive: don't reuse a name such as `$TODO`/`$todo` for two things.
 
@@ -59,5 +63,7 @@ t done 2                # answer y -> logs "write report: b"
 ```
 
 For the routine, write a `routine.txt` with untimed, `weekdays`, `sat,sun HH:MM` and single-word lines, then step `$OneTaskNow` through: a weekday morning, the same day after a timed task (added once only), the next day (yesterday's leftovers logged as missed), a jump over skipped days (each logged), and a weekend day. Check `todo.txt`, `done.txt` and `routine.last` after each step.
+
+For reminders, use the real clock: create `HKCU\Software\OneTask` with an empty `Stamp` and a temp `routine.txt` with one task two minutes ago and one in 30 minutes. The first `t` must register `OneTask` with logon, event and time triggers; a second `t` must not re-register. Add two more past-time tasks, run `Start-ScheduledTask OneTask` and check for one batched toast and `LastTaskResult` 0. Then uninstall (task and key gone) and restore any real install with `setup`.
 
 For `setup`/`uninstall`, pass `-Root <temp>`, check both `profile.ps1` files, and confirm `uninstall` leaves profiles, policy and `HKCU\Software\OneTask` as they were.

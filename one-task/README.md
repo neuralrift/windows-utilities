@@ -45,36 +45,55 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 
 ## Commands
 
+The rule: `t <verb>` acts on your tasks, and `t routine <same verb>` acts on your routine.
+
+**Every day**
+
 | Command | Does |
 |---|---|
 | `t` | Shows the current task |
 | `t <text>` | Parks a task at the bottom; never asks anything. A task already on the list is not added again |
-| `t <text> // <note>` | Parks a task with a note (see Notes) |
-| `t <name>: <a> / <b> / <c>` | Parks a task as steps (see Steps) |
-| `t add` | Asks for tasks one per line until an empty line; takes any characters, including `'` |
 | `t done` | Logs the current task to `done.txt` and shows the next one |
-| `t done 3`, `t done <text>` | Logs that task (number from `t list`, or the one task containing the text) and says which; if several match the text, prints them with their numbers |
-| `t done 2 4` | Logs several tasks, after confirmation |
-| `t undo` | Takes back the last change to your tasks, including what it logged |
-| `t log` | This week's totals, and how well each routine was kept (see Log) |
-| `t log <name>` | One routine, or the tasks called `<name>` or `<name>: ...` |
-| `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
 | `t skip` | Moves the current task to the bottom |
 | `t now <text>` | Puts a task at the top (for interruptions); if it is already on the list, moves it to the top |
 | `t now 3` | Moves task 3 to the top, making it the current one |
+
+**Tasks**
+
+| Command | Does |
+|---|---|
+| `t list` | Shows all tasks, numbered, with notes and ages |
+| `t <text> // <note>` | Parks a task with a note (see Notes) |
+| `t <name>: <a> / <b> / <c>` | Parks a task as steps (see Steps) |
+| `t add` | Asks for tasks one per line until an empty line; takes any characters, including `'` |
+| `t done 3`, `t done <text>` | Logs that task (number from `t list`, or the one task containing the text) and says which; if several match the text, prints them with their numbers |
+| `t done 2 4` | Logs several tasks, after confirmation |
+| `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
 | `t note <text>` | Adds a note to the current task (`t note` alone asks for it) |
 | `t reword <text>` | Changes the current task's text and keeps its note; end with `//` to drop the note, or give `text // new note` to replace it |
 | `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b`; a note stays with the first step. `t split` alone asks for the steps one per line |
-| `t list` | Shows all tasks, numbered |
+| `t undo` | Takes back the last change to your tasks, including what it logged |
+| `t log` | This week's totals, and how well each routine was kept (see Log) |
+| `t log <name>` | One routine, or the tasks called `<name>` or `<name>: ...` |
+
+**Routine**
+
+| Command | Does |
+|---|---|
+| `t routine`, `t routine list` | Shows your routine, numbered, with when each task runs |
 | `t routine <line>` | Adds a line to your routine, e.g. `t routine weekdays 14:00 timesheet`, and says when it runs |
 | `t routine add` | Asks for routine lines one per line until an empty line; takes any characters |
-| `t routine`, `t routine list` | Shows your routine, numbered, with when each task runs |
 | `t routine del 2`, `t routine del <text>` | Removes routine lines after confirmation |
-| `t edit` | Opens `todo.txt` in your editor (see below) |
 | `t routine edit` | Opens `routine.txt` in your editor |
-| `t merge` | Merges conflict copies left by your sync app, after confirmation (see below) |
+
+**Other**
+
+| Command | Does |
+|---|---|
+| `t edit` | Opens `todo.txt` in your editor (see below) |
+| `t merge` | Merges conflict copies left by your sync app, after confirmation (see Conflict copies) |
 | `t setup` | See Setup |
-| `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
+| `t uninstall` | Removes the profile lines, the reminder task and the registry key; keeps your tasks |
 | `t help` (or `-h`, `--help`, `?`) | Lists the commands |
 
 `t remind` is run by the reminder task; you don't need it.
@@ -82,6 +101,8 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 `list`, `edit`, `remind`, `merge`, `skip`, `add`, `undo`, `help`, `setup` and `uninstall` only act when typed alone, so `t list groceries` and `t help Sam move` park a task. The routine follows the same rule: `t routine list`, `t routine add` and `t routine edit` only act when nothing follows them, so `t routine add tests to the parser` adds that whole line; anything else after `t routine`, except `del`, is a routine line.
 
 `t edit` uses a terminal editor when it finds one: `$env:VISUAL` or `$env:EDITOR` if set, otherwise the first of `nvim`, `vim`, `nano` and `edit` (Microsoft Edit) on your PATH, and Notepad as the fallback. With a terminal editor, `t` shows your current task when you close it.
+
+Colours carry one meaning each: cyan for the current task, grey for other tasks, dim grey for notes and hints, green for done or on track, yellow for something that needs attention, red for missed or errors. The words say the same thing, so nothing depends on colour. Set the `NO_COLOR` environment variable to turn colours off.
 
 ## Notes
 
@@ -104,35 +125,6 @@ t report: draft / review / send
 parks `report: draft`, `report: review` and `report: send`. `t now` and `t add` take the same form, and `t split draft / review / send` turns the current task into steps. Each step is an ordinary task, done on its own. While several steps of the same name are left, `t` shows `(3 steps left)` next to the current one, and says `report: all steps done.` after the last.
 
 The name and its `:` are needed: `t call mom / dad` stays one task.
-
-## Log
-
-`t log` reads `done.txt` and reports; it changes nothing.
-
-```
-this week: 12 done, 1 dropped, 3 missed
-routine, last 4 weeks:
-  timesheet  16 of 20 days  80%  streak 3
-  morning     9 of 20 days  45%  streak 0
-```
-
-`t log timesheet` shows one routine: the days it was kept out of the days it was due, the current streak, and a row of marks for the last 20 of those days (`x` kept, `.` missed), oldest first. A routine with steps counts as kept on a day only when no step was missed. The figures are green from 80%, yellow from 50% and red below.
-
-For a name that is not a routine, `t log blog` counts the finished tasks called `blog` or `blog: ...`:
-
-```
-blog: 3 done (1 this week), last on 2026-11-06
-```
-
-If nothing was ever logged under the name, `t log <text>` parks `log <text>` as a task and says so, because "log" also starts real tasks (`t log hours`).
-
-## Hints
-
-`t` keeps the order you give the list and never reorders it, but it points things out in one dim line:
-
-- `t list` shows how long a task has been on the list once it is three days old (`5d`, `3w`).
-- When the current task has been skipped three times: `skipped 3 times: split it (t split), reword it, or drop it (t del)?`
-- After a `t done`, at most once a day, the task that has waited longest, if that is three weeks or more: `waiting 5 weeks: renew passport  (t now 7)`.
 
 ## Daily routine
 
@@ -175,6 +167,35 @@ Each run puts the due timed tasks at the top of `todo.txt` and shows one notific
 
 The task is armed by the first `t` after `setup`, and again by the first `t` after `routine.txt` changes, which takes about a second once. Do Not Disturb holds the notifications as usual.
 
+## Log
+
+`t log` reads `done.txt` and reports; it changes nothing.
+
+```
+this week: 12 done, 1 dropped, 3 missed
+routine, last 4 weeks:
+  timesheet  16 of 20 days  80%  streak 3
+  morning     9 of 20 days  45%  streak 0
+```
+
+`t log timesheet` shows one routine: the days it was kept out of the days it was due, the current streak, and a row of marks for the last 20 of those days (`x` kept, `.` missed), oldest first. A routine with steps counts as kept on a day only when no step was missed. The figures are green from 80%, yellow from 50% and red below.
+
+For a name that is not a routine, `t log blog` counts the finished tasks called `blog` or `blog: ...`:
+
+```
+blog: 3 done (1 this week), last on 2026-11-06
+```
+
+If nothing was ever logged under the name, `t log <text>` parks `log <text>` as a task and says so, because "log" also starts real tasks (`t log hours`).
+
+## Hints
+
+`t` keeps the order you give the list and never reorders it, but it points things out in one dim line:
+
+- `t list` shows how long a task has been on the list once it is three days old (`5d`, `3w`).
+- When the current task has been skipped three times: `skipped 3 times: split it (t split), reword it, or drop it (t del)?`
+- After a `t done`, at most once a day, the task that has waited longest, if that is three weeks or more: `waiting 5 weeks: renew passport  (t now 7)`.
+
 ## Conflict copies
 
 If two PCs change the same file before it syncs, the sync app keeps both and saves one as a copy:
@@ -190,7 +211,7 @@ If two PCs change the same file before it syncs, the sync app keeps both and sav
 
 - a `todo` copy: its tasks that are not already in `todo.txt` go to the bottom. It skips tasks logged in `done.txt` from a week before the copy onwards, so finished tasks don't come back, and routine tasks, which the routine adds itself.
 - a `done` copy: its lines that are not already in `done.txt` are appended.
-- a `routine.last` copy: deleted; it is the tool's own state.
+- a copy of `routine.last`, `todo.undo` or `todo.age`: deleted; they are the tool's own state.
 - a `routine.txt` copy: not merged. Compare it with `t routine list` and delete it yourself.
 
 Merged copies are deleted; most sync apps keep them in their recycle bin.
@@ -201,19 +222,18 @@ Merged copies are deleted; most sync apps keep them in their recycle bin.
 t uninstall
 ```
 
-Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty) and the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Your `todo.txt`, `done.txt` and `routine.txt` are kept on purpose; delete the task folder yourself if you no longer want them.
+Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty) and the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Everything in the task folder is kept on purpose; delete the folder yourself if you no longer want your tasks.
 
 ## Known limitations
 
 - **Tidying:** `t` trims tasks and collapses runs of spaces when it next changes `todo.txt` or `routine.txt`; comments in `routine.txt` are kept. `t list` marks a task that repeats an earlier one with `(same as #n)`.
 - **Ages are per PC and per wording:** a task's age starts when `t` on this PC first changes the list with the task on it, and starts again if you reword it in an editor (`t reword` keeps it).
 - **The log matches by name:** rewording a routine or a task name starts a new history. Days the PC was off count as missed (up to 31), so a holiday lowers the figures.
-- **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword`, `split` or `routine`, nor with `log` followed by a name that has history, nor be exactly `list`, `edit`, `log`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
+- **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword`, `split` or `routine`, nor with `log` followed by a name that has history, nor be exactly `list`, `edit`, `log`, `skip`, `add`, `undo`, `help`, `merge`, `remind`, `setup` or `uninstall`. Use `t add` for such a task.
 - **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, a word such as `14:00` or `2pm` as a time, and `quiet` after a time as the quiet mark. A routine task that should start with such a word cannot.
-- **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
+- **Routine tasks are matched by name:** a note, or splitting one into steps, keeps it a routine task. Rewording it, or editing its line in `routine.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
 - **Routine edits from another device:** the reminder schedule updates at the next `t` on this PC, or at the next reminder, logon or wake. Until then a new timed task can fire late.
 - **Notification source:** notifications show as coming from Windows PowerShell, because the tool registers no app of its own.
-- **Reserved first word:** `remind` cannot be parked as a one-word task.
 - **Two PCs on the same day:** if both start a new routine day before the files sync, `done.txt` can get duplicate `missed:` lines.
 - **Steps are read from the text:** a task that contains both `name: ` and ` / ` is always parked as steps. To keep such a line as one task, add it with `t edit`.
 - **PowerShell syntax in tasks:** `'`, `;`, `#`, `|`, `&`, `(` and `$` are read by PowerShell before `t` runs; a lone `'` makes it wait for a closing quote (`>>`). Quote the task (`t "don't forget"`) or use `t add`, which takes the line as typed.

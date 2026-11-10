@@ -8,8 +8,8 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 
 ## Core ideas (do not break)
 
-1. **One task visible.** Bare `t` prints only the first task. `t list` and `t edit` are the only deliberate ways to see all tasks.
-2. **Plain text.** `todo.txt` is one task per line, line 1 is the current task. No metadata, syntax, JSON or database; it must stay editable in Notepad or on a phone. Blank lines are ignored. The format is frozen: an existing `todo.txt` must stay readable as-is.
+1. **One task visible.** Bare `t` prints only the first task (plus its note, and at most one dim hint). `t list` and `t edit` are the only deliberate ways to see all tasks.
+2. **Plain text.** `todo.txt` is one task per line, line 1 is the current task. No metadata, syntax, JSON or database; it must stay editable in Notepad or on a phone. The two conventions inside a line are optional and read as plain text: ` // ` before a note, and `name: step` for steps. Anything the tool needs to remember beyond that goes in its own side files (`routine.last`, `todo.undo`, `todo.age`), never in `todo.txt`. Blank lines are ignored. The format is frozen: an existing `todo.txt` must stay readable as-is.
 3. **Capture without interruption.** `t <text>` appends to the bottom and prints `parked.`. It never shows the list and never asks a question.
 4. **Done is a log.** `t done` appends `YYYY-MM-DD task` to `done.txt`, the routine appends `YYYY-MM-DD missed: task`, and `t del` appends `YYYY-MM-DD dropped: task`. Only reports (`t log`) read it back; nothing acts on it.
 5. **Sync is the file system.** Data lives in the task folder chosen at setup (by default `Apps\one-task\` in a OneDrive, Google Drive, Dropbox or iCloud Drive folder), never in this repo. No sync code, network calls, accounts or servers.
@@ -66,7 +66,8 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
   - a script block run with `&` cannot set the caller's variables; run it with `.` when it must (`. $read`)
   - wrap an `if` that yields lines in `@()` as well (`$x = @(if (...) { ReadAllLines(...) })`): an `if` expression unrolls a one-element array into a bare string, so `$x[0]` becomes its first character
 - No dependencies: only built-in PowerShell and .NET.
-- Bump `$OneTaskVersion` per the root versioning rules, and update the command table and Known limitations in `README.md`.
+- Bump `$OneTaskVersion` per the root versioning rules, and update the command table and Known limitations in `README.md`. Keep `t help`, the usage comment at the top of `t.ps1` and the README command tables saying the same thing.
+- Not built on purpose: goals or OKRs on top of `t log`, priorities or flags (line order is the priority), a `clean` command (tidying is automatic), a summary on terminal open.
 
 ## Before finishing any change
 

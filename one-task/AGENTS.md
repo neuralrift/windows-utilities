@@ -13,7 +13,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 3. **Capture without interruption.** `t <text>` appends to the bottom and prints `parked.`. It never shows the list and never asks a question.
 4. **Done is a log.** `t done` appends `YYYY-MM-DD task` to `done.txt`, and the routine appends `YYYY-MM-DD missed: task`. Nothing reads it back.
 5. **Sync is the file system.** Data lives in `OneDrive\Apps\one-task\`, never in this repo. No sync code, network calls, accounts or servers.
-6. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t`.
+6. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t` with `$OneTaskOpening` set, so an empty list prints nothing there; a typed `t` still prints "Nothing to do".
 7. **Confirm before guessing.** `t done <n>` and `t done <text>` show what they will log and ask first; bare `t done` does not.
 
 ## Design (keep intact)

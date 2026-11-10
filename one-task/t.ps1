@@ -120,7 +120,7 @@ function t {
     switch ($cmd) {
         '' {
             if ($tasks.Count) { Write-Host "$([char]0x25B6) $($tasks[0])" -ForegroundColor Cyan }
-            else { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
+            elseif (-not $OneTaskOpening) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
             if ($copies.Count) { Write-Host 'OneDrive saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
         }
@@ -317,4 +317,5 @@ function t {
     t
 }
 
-if ($Command) { t @Command } else { t }   # bare t shows the one task whenever a terminal opens
+# Bare t shows the one task whenever a terminal opens; an empty list stays silent there
+if ($Command) { t @Command } else { $OneTaskOpening = $true; t; $OneTaskOpening = $false }

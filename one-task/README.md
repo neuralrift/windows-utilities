@@ -4,7 +4,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 
 ## How it works
 
-- The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task.
+- The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task. With nothing to do, a new terminal prints nothing; typing `t` still says so.
 - Tasks live in `OneDrive\Apps\one-task\`:
   - `todo.txt`: one task per line, line 1 is the current task. Edit it in Notepad or on your phone; blank lines are ignored.
   - `done.txt`: a log of `YYYY-MM-DD task` lines, and `YYYY-MM-DD missed: task` for routine tasks left undone. Nothing reads it back.

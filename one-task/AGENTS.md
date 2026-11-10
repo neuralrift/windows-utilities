@@ -15,7 +15,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 5. **Sync is the file system.** Data lives in the task folder chosen at setup (by default `Apps\one-task\` in a OneDrive, Google Drive, Dropbox or iCloud Drive folder), never in this repo. No sync code, network calls, accounts or servers.
 6. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t` with `$OneTaskOpening` set, so an empty list prints nothing there; a typed `t` still prints "Nothing to do".
 7. **Undo before confirm.** A change to one task happens at once, says what it did, and can be taken back with `t undo`. Deleting, and acting on several tasks at once, ask first.
-8. **Command line first.** Every common change to `todo.txt` and `routine.txt` should be possible through `t`, so the user never has to edit the files by hand. `t edit` and `t edit routine` are fallbacks, not the way to do things; when a change can only be made in an editor, that is a gap to close.
+8. **Command line first.** Every common change to `todo.txt` and `routine.txt` should be possible through `t`, so the user never has to edit the files by hand. `t edit` and `t routine edit` are fallbacks, not the way to do things; when a change can only be made in an editor, that is a gap to close.
 
 ## Design (keep intact)
 
@@ -24,15 +24,16 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 - `setup` writes one line ending in `# one-task` to the all-hosts `profile.ps1` of each installed edition (Documents via `GetFolderPath('MyDocuments')`). The line carries `-Folder`, the task folder used as is, and is guarded by `Test-Path` because profiles may sync between PCs.
 - `setup` changes the CurrentUser execution policy only when it would block the profile, and saves the old value and edition in `HKCU\Software\OneTask`. `uninstall` restores it only if it is still `RemoteSigned`.
 - `uninstall` removes the marked lines and the registry key, and keeps the task data.
-- Commands that take no text (`list`, `edit`, `remind`, `merge`, `skip`, `add`, `help`, `setup`, `uninstall`) only match when typed alone; `edit` also accepts exactly `routine` or `routines`.
-- `t routine` mirrors `t`: alone or with `list` it lists, `add` alone prompts, `del` removes, and any other text is a routine line to add. `done`/`del`/`top` and `routine del` share `$select`, which takes the list to pick from.
+- Commands that take no text (`list`, `edit`, `remind`, `merge`, `skip`, `add`, `undo`, `help`, `setup`, `uninstall`) only match when typed alone.
+- The rule for the whole interface: `t <verb>` acts on tasks and `t routine <same verb>` acts on the routine. `t routine` alone or with `list` lists; `list`, `add` and `edit` count only when nothing follows them; `del` removes; any other text is a routine line to add. `t edit routine` still works but is not documented. `done`, `del`, `now <number>` and `routine del` share `$select`, which takes the list to pick from.
 - `t edit` picks `$VISUAL`/`$EDITOR` (run through `cmd /c` so an editor command with arguments works), then `nvim`, `vim`, `nano`, `edit`, then Notepad. After a terminal editor closes it calls `t`, which shows the task and re-arms reminders if the routine changed; Notepad does not wait, so it returns at once.
-- New command words must rarely start a real task, or capture breaks: `top` and `del` were chosen over `do`, `pick`, `delete` and `drop` for that reason.
-- A task line is `title // note`. Duplicates (on park, `now` and `add`) compare titles case-insensitively; text matching for `done`/`del`/`top` searches the whole line. `done`, `del` and `top` share one selection rule (numbers, or text with exactly one match).
-- `del` confirms even for the current task and logs `dropped:`; `top` changes nothing but order, so it does not confirm.
+- New command words must rarely start a real task, or capture breaks: `del` and `reword` were chosen over `delete`, `drop`, `do`, `pick`, `edit` and `fix` for that reason. `now` both adds at the top and, given a number, moves a task there; there is no separate `top`.
+- A task line is `title // note`. Duplicates (on park, `now` and `add`) compare titles case-insensitively; text matching for `done`/`del` searches the whole line (numbers, or text with exactly one match).
+- `del` confirms even for the current task and logs `dropped:`.
+- A command that can do nothing says why in one line; it never returns silently.
 - `t add` reads with `Read-Host`, the only way to take `'` and other PowerShell syntax as typed.
 - `t routine add` uses the same `$parseLine` as the routine itself, so what it reports is what will run. It skips a task text already in the routine and writes only when it adds something (writing changes `Stamp`, which re-arms reminders).
-- PowerShell turns `a, b` and `mon,thu` into array arguments; `$a` joins them back with `, `, and `$parseLine` accepts `mon, thu`. `t routine list <words>` is treated as a routine line, so a task may start with "list".
+- PowerShell turns `a, b` and `mon,thu` into array arguments; `$a` joins them back with `, `, and `$parseLine` accepts `mon, thu`.
 - `split` separates steps with ` / `, because `;` is a PowerShell statement separator.
 - Routine: `routine.txt` is user-edited plain text (`[days] [HH:MM] task`, `#` comments). `routine.last` is the tool's state: line 1 is the last routine day, then the routine tasks added on it. Routine work runs at the start of every `t` call, so it must stay plain file IO, and it writes only when something changes.
 - Routine tasks are identified by their title (`$isOf`: the entry's text, or a step `entry: ...`), so a note or a split does not detach them; on a new day, the previous day's added tasks still in `todo.txt` are removed and logged as missed. Backfilled missed days are capped at 31.

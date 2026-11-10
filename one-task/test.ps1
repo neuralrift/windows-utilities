@@ -20,7 +20,7 @@ function Reset([string[]]$Todo = @(), [string[]]$Routine, [string]$Now = '2026-1
     $script:OneTaskAnswers = $null
 }
 function At([string]$Now) { $script:OneTaskNow = [datetime]$Now }
-function Answers { $script:OneTaskAnswers = New-Object Collections.Queue (, [object[]]$args) }
+function Answers { $script:OneTaskAnswers = New-Object Collections.Queue (, [object[]]@($args | ForEach-Object { $_ })) }   # Answers 'y', 'n' or Answers 'y' 'n'
 # Output lines joined with "|". A piece printed without a newline is its own element.
 function Run { (t @args 6>&1 | ForEach-Object { "$_" }) -join '|' }
 function File([string]$Name) { if (Test-Path "$dir\$Name") { [IO.File]::ReadAllLines("$dir\$Name") -join '|' } else { '' } }
@@ -100,6 +100,35 @@ try {
     Is 'undo word'        (Run undo the mess)  'parked.'
     Run x | Out-Null; Run undo | Out-Null
     Is 'undo park'        (File todo.txt)      'undo the mess'
+
+    # --- step 3: commands ---
+    Reset 'a', 'b', 'c'
+    Is 'now number'     (Run now 3)                  "$arrow c"
+    Is 'now order'      (File todo.txt)              'c|a|b'
+    Is 'now bad'        (Run now 9)                  'No such number. See: t list'
+    Is 'now dupe'       (Run now B)                  "Already on your list; moved to the top.|$arrow b"
+    Is 'now new'        (Run now fix bug)            "$arrow fix bug"
+    Is 'now alone'      (Run now)                    'Usage: t now <task>, or t now <number> to move a task to the top'
+    Is 'top parks'      (Run top 2)                  'parked.'
+    Reset 'call bank // ask fee'
+    Is 'reword'         (Run reword phone the bank)  "$arrow phone the bank|  ask fee"
+    Run reword phone the bank // | Out-Null
+    Is 'reword clears'  (File todo.txt)              'phone the bank'
+    Is 'skip one'       (Run skip)                   'Only one task on your list.'
+    Answers 'x', 'y', ''
+    Is 'split prompt'   (Run split)                  "$arrow phone the bank: x"
+    Is 'split file 2'   (File todo.txt)              'phone the bank: x|phone the bank: y'
+    Reset
+    Is 'skip empty'     (Run skip)                   'Nothing to do. Add one: t <task>'
+    Is 'done empty'     (Run done)                   'Nothing to do. Add one: t <task>'
+    Is 'routine add x'  (Run routine add tests)      '  added to your routine: add tests (every day, in the morning)'
+    Is 'routine edit x' (Run routine edit slides)    '  added to your routine: edit slides (every day, in the morning)'
+    Is 'routine list x' (Run routine list of chores) '  added to your routine: list of chores (every day, in the morning)'
+    Answers 'weekdays 14:00 timesheet', ''
+    Is 'routine prompt' (Run routine add)            '  added to your routine: timesheet (weekdays at 14:00)'
+    Answers 'y'
+    Is 'routine del'    (Run routine del 1)          '  add tests  every day, in the morning|  removed 1 from your routine.'
+    Is 'help'           ((Run help).Split('|')[0])   'Every day'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

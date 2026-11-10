@@ -56,18 +56,19 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t done 2 4` | Logs several tasks, after confirmation |
 | `t undo` | Takes back the last change to your tasks, including what it logged |
 | `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
-| `t top 3`, `t top <text>` | Makes that task the current one |
 | `t skip` | Moves the current task to the bottom |
 | `t now <text>` | Puts a task at the top (for interruptions); if it is already on the list, moves it to the top |
+| `t now 3` | Moves task 3 to the top, making it the current one |
 | `t note <text>` | Adds a note to the current task (`t note` alone asks for it) |
-| `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b`; a note stays with the first step |
+| `t reword <text>` | Changes the current task's text and keeps its note; end with `//` to drop the note, or give `text // new note` to replace it |
+| `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b`; a note stays with the first step. `t split` alone asks for the steps one per line |
 | `t list` | Shows all tasks, numbered |
 | `t routine <line>` | Adds a line to your routine, e.g. `t routine weekdays 14:00 timesheet`, and says when it runs |
 | `t routine add` | Asks for routine lines one per line until an empty line; takes any characters |
 | `t routine`, `t routine list` | Shows your routine, numbered, with when each task runs |
 | `t routine del 2`, `t routine del <text>` | Removes routine lines after confirmation |
 | `t edit` | Opens `todo.txt` in your editor (see below) |
-| `t edit routine` | Opens `routine.txt` in your editor |
+| `t routine edit` | Opens `routine.txt` in your editor |
 | `t merge` | Merges conflict copies left by your sync app, after confirmation (see below) |
 | `t setup` | See Setup |
 | `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
@@ -75,7 +76,7 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 
 `t remind` is run by the reminder task; you don't need it.
 
-`list`, `edit`, `remind`, `merge`, `skip`, `add`, `undo`, `help`, `setup` and `uninstall` only act when typed alone (`edit` also takes `routine`), so `t list groceries` and `t help Sam move` park a task. Everything after `t routine` is a routine line, unless it starts with `list`, `add` or `del`.
+`list`, `edit`, `remind`, `merge`, `skip`, `add`, `undo`, `help`, `setup` and `uninstall` only act when typed alone, so `t list groceries` and `t help Sam move` park a task. The routine follows the same rule: `t routine list`, `t routine add` and `t routine edit` only act when nothing follows them, so `t routine add tests to the parser` adds that whole line; anything else after `t routine`, except `del`, is a routine line.
 
 `t edit` uses a terminal editor when it finds one: `$env:VISUAL` or `$env:EDITOR` if set, otherwise the first of `nvim`, `vim`, `nano` and `edit` (Microsoft Edit) on your PATH, and Notepad as the fallback. With a terminal editor, `t` shows your current task when you close it.
 
@@ -91,7 +92,7 @@ call bank // ask about the late fee
 
 ## Daily routine
 
-`routine.txt` holds tasks you do regularly, one per line. Manage it with `t routine <line>`, `t routine list` and `t routine del`; adding skips a task already in the routine. `t edit routine` is there for anything else. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
+`routine.txt` holds tasks you do regularly, one per line. Manage it with `t routine <line>`, `t routine list` and `t routine del`; adding skips a task already in the routine. `t routine edit` is there for anything else. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
 
 | Line | Added |
 |---|---|
@@ -150,7 +151,7 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 
 ## Known limitations
 
-- **Reserved first words:** a task cannot start with `done`, `del`, `top`, `now`, `note` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
+- **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
 - **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, and `HH:MM` as a time. A routine task that should start with such a word cannot.
 - **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
 - **Routine edits from another device:** the reminder schedule updates at the next `t` on this PC, or at the next reminder, logon or wake. Until then a new timed task can fire late.

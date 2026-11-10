@@ -1,7 +1,7 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
-# Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t top <n|text> | t skip
-#        t now <task> | t note <text> | t split <a> / <b> | t list | t edit [routine] | t merge | t help
-#        t routine [list] | t routine <line> | t routine add | t routine del <n|text>
+# Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t skip | t now <task|n>
+#        t note <text> | t reword <text> | t split [<a> / <b>] | t list | t undo | t edit | t merge | t help
+#        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
 #        t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -20,14 +20,14 @@ function t {
     $a    = @($args | ForEach-Object { if ($_ -is [array]) { $_ -join ', ' } else { [string]$_ } })
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
-    # t routine [list|add|del] ...: alone or "list" lists, "del" removes, anything else is a routine line to add
+    # t routine [list|add|edit|del]: list, add and edit only count when alone, as for tasks, so
+    # "t routine add tests" is the routine line "add tests"; anything else after "routine" is a line to add
     if ($cmd -eq 'routine') {
         $sub = if ($rest.Count) { $rest[0] } else { 'list' }
-        if ($sub -in 'list', 'add', 'del') { $rest = @($rest | Select-Object -Skip 1) } else { $sub = 'add' }
+        if ($sub -eq 'del' -or ($sub -in 'list', 'add', 'edit' -and $rest.Count -le 1)) { $rest = @($rest | Select-Object -Skip 1) } else { $sub = 'add' }
         $cmd = "routine $sub"
-        if ($sub -eq 'list' -and $rest.Count) { $cmd = 'routine add'; $rest = @('list') + $rest }   # "t routine list x" is a line
     }
-    if ($cmd -eq 'edit' -and $rest.Count -eq 1 -and $rest[0] -in 'routine', 'routines') { $cmd = 'edit routine'; $rest = @() }
+    if ($cmd -eq 'edit' -and $rest.Count -eq 1 -and $rest[0] -in 'routine', 'routines') { $cmd = 'routine edit'; $rest = @() }   # old form, kept working
     # Commands that take no text only count when typed alone: "t list groceries" is parked
     if ($rest.Count -and $cmd -in 'list', 'edit', 'remind', 'merge', 'skip', 'add', 'undo', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
     if ($cmd -in '-h', '--help', '?') { $cmd = 'help' }
@@ -215,26 +215,31 @@ function t {
         }
         'help' {
             @(
-                't                        show the current task'
-                't <task> [// note]       park a task at the bottom, optionally with a note'
-                't add                    type tasks one per line, any characters; empty line ends'
-                't now <task>             put a task at the top'
-                't done [n ...|text]      log the current task, or the chosen ones, as done'
-                't del [n ...|text]       remove the current task, or the chosen ones (logged as dropped)'
-                't top <n|text>           make a task the current one'
-                't skip                   move the current task to the bottom'
-                't note <text>            add a note to the current task'
-                't split <a> / <b> ...    replace the current task with its steps'
-                't list                   all tasks, numbered'
-                't routine <line>         add to the routine: [weekdays|weekends|mon,thu] [HH:MM] task'
-                't routine add            type routine lines, any characters; empty line ends'
-                't routine [list]         the routine, numbered, with when each runs'
-                't routine del <n|text>   remove from the routine'
-                't edit [routine]         open todo.txt (or routine.txt) in your editor'
-                't undo                   take back the last change to your tasks'
-                't merge                  merge conflict copies from your sync app'
-                't setup | t uninstall    install or remove'
-            ) | ForEach-Object { & $say $_ }
+                'Every day'
+                '  t                        show the current task'
+                '  t <task> [// note]       park a task at the bottom'
+                '  t done                   finish the current task'
+                '  t skip                   move it to the bottom'
+                '  t now <task|number>      put a task at the top, or move one there'
+                'Tasks'
+                '  t list                   all tasks, numbered'
+                '  t done <n ...|text>      finish chosen tasks'
+                '  t del [n ...|text]       remove tasks (logged as dropped)'
+                '  t note <text>            add a note to the current task'
+                '  t reword <text>          change the current task''s text'
+                '  t split <a> / <b> ...    replace the current task with its steps'
+                '  t add                    type tasks one per line, any characters'
+                '  t undo                   take back the last change'
+                'Routine'
+                '  t routine                the routine, numbered, with when each runs'
+                '  t routine <line>         add: [weekdays|weekends|mon,thu] [HH:MM] task'
+                '  t routine del <n|text>   remove from the routine'
+                '  t routine add | edit     type lines, or open routine.txt'
+                'Other'
+                '  t edit                   open todo.txt in your editor'
+                '  t merge                  merge conflict copies from your sync app'
+                '  t setup | t uninstall    install or remove'
+            ) | ForEach-Object { if ($_.StartsWith(' ')) { & $say $_ } else { & $say $_ Cyan } }
             & $say "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." DarkGray
             return
         }
@@ -253,7 +258,7 @@ function t {
             return
         }
         'done' {
-            if (-not $tasks.Count) { return }
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             $pick = @(0)
             if ($rest.Count) {
                 $pick = & $select 'done'
@@ -269,7 +274,7 @@ function t {
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
         'del' {
-            if (-not $tasks.Count) { return }
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             $pick = @(0)
             if ($rest.Count) { $pick = & $select 'del'; if ($null -eq $pick) { return } }
             $pick | ForEach-Object { & $say "  $($tasks[$_])" }
@@ -277,34 +282,46 @@ function t {
             $logLines = @($pick | ForEach-Object { "$day dropped: $($tasks[$_])" })
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
-        'top' {
-            if (-not $rest.Count) { & $say 'Usage: t top <number|text>' Yellow; return }
-            $pick = & $select 'top'
-            if ($null -eq $pick) { return }
-            if (@($pick).Count -gt 1) { & $say 'Choose one task.' Yellow; return }
-            $tasks = @($tasks[$pick[0]]) + @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -ne $pick[0]) { $tasks[$i] } })
-        }
         'skip' {
-            if (-not $tasks.Count) { return }
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
+            if ($tasks.Count -eq 1) { & $say 'Only one task on your list.' DarkGray; return }
             $tasks = @($tasks | Select-Object -Skip 1) + $tasks[0]
         }
         'now' {
-            if (-not $rest.Count) { return }
-            $new = $rest -join ' '
-            $i = & $findDupe $new
-            if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i]; $tasks = @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } }) }
-            $tasks = @($new) + $tasks
+            # A number moves that task to the top; text adds a task there (or moves it up if it is already listed)
+            if (-not $rest.Count) { & $say 'Usage: t now <task>, or t now <number> to move a task to the top' Yellow; return }
+            if ($rest.Count -eq 1 -and $rest[0] -match '^\d+$') {
+                $pick = & $select 'now'
+                if ($null -eq $pick) { return }
+                $i = $pick[0]; $new = $tasks[$i]
+            } else {
+                $new = $rest -join ' '
+                $i = & $findDupe $new
+                if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i] }
+            }
+            $tasks = @($new) + @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } })
         }
         'note' {
-            if (-not $tasks.Count) { return }
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             $text = if ($rest.Count) { $rest -join ' ' } else { & $ask 'Note' }
             if (-not "$text".Trim()) { return }
             $tasks[0] = if ($tasks[0] -match ' // ') { "$($tasks[0]); $text" } else { "$($tasks[0]) // $text" }
         }
+        'reword' {
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
+            $text = if ($rest.Count) { $rest -join ' ' } else { & $ask 'New text' }
+            if (-not "$text".Trim()) { return }
+            $old = $tasks[0] -split ' // ', 2
+            # The note is kept unless the new text brings its own ("x // new note") or ends with "//" (no note)
+            $tasks[0] = if ($text -match ' // ') { $text } elseif ($text -match '\s*//$') { ($text -replace '\s*//$', '').Trim() } elseif ($old.Count -gt 1) { "$text // $($old[1])" } else { $text }
+        }
         'split' {
-            # PowerShell treats ";" as a statement separator, so steps are separated by " / "
-            $steps = @(($rest -join ' ') -split '\s+/\s+' | Where-Object { $_.Trim() })
-            if (-not $tasks.Count -or $steps.Count -lt 2) { & $say 'Usage: t split <step> / <step> ...' Yellow; return }
+            # PowerShell treats ";" as a statement separator, so steps are separated by " / ".
+            # Alone, it asks for the steps one per line, so they can hold any characters.
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
+            $steps = @(if ($rest.Count) { ($rest -join ' ') -split '\s+/\s+' } else { while ($line = "$(& $ask 'Step')".Trim()) { $line } })
+            $steps = @($steps | Where-Object { "$_".Trim() })
+            if ($steps.Count -lt 2) { & $say 'Usage: t split <step> / <step> ...  (or t split alone to type them)' Yellow; return }
             $parts = $tasks[0] -split ' // ', 2   # the note stays with the first step
             $new = @($steps | ForEach-Object { "$($parts[0]): $($_.Trim())" })
             if ($parts.Count -gt 1) { $new[0] += " // $($parts[1])" }
@@ -364,7 +381,7 @@ function t {
             t
             return
         }
-        { $_ -in 'edit', 'edit routine' } {
+        { $_ -in 'edit', 'routine edit' } {
             # A terminal editor first: $VISUAL/$EDITOR, then nvim, vim, nano, Microsoft Edit; Notepad as the fallback
             $file = if ($cmd -eq 'edit') { $TODO } else { $ROUTINE }
             $ed = @($env:VISUAL, $env:EDITOR | Where-Object { $_ })

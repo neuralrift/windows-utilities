@@ -29,7 +29,7 @@ function t {
     }
     if ($cmd -eq 'edit' -and $rest.Count -eq 1 -and $rest[0] -in 'routine', 'routines') { $cmd = 'edit routine'; $rest = @() }
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'remind', 'merge', 'skip', 'add', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'remind', 'merge', 'skip', 'add', 'undo', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
     if ($cmd -in '-h', '--help', '?') { $cmd = 'help' }
 
     $dir   = $OneTaskDir
@@ -45,12 +45,31 @@ function t {
     $ask = { param($prompt) if ($OneTaskAnswers -is [Collections.Queue]) { if ($OneTaskAnswers.Count) { "$($OneTaskAnswers.Dequeue())" } else { '' } } else { Read-Host $prompt } }
     # One palette: Cyan current task, Gray other tasks, DarkGray notes and hints, Green done or on track,
     # Yellow needs attention, Red missed or error. NO_COLOR (any value) turns colour off.
+    # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
+    $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
+    # A task belongs to a routine entry when its title is the entry, or a step of it ("entry: step")
+    $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
 
     if ($cmd -notin 'setup', 'uninstall') {
         if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
-        $tasks = @([IO.File]::ReadAllLines($TODO) | Where-Object { $_.Trim() })
+        $UNDO = Join-Path $dir 'todo.undo'
+        # Dot-run (. $read): sets $tasks, $before and $seen in this scope
+        $read = {
+            $tasks  = @([IO.File]::ReadAllLines($TODO) | Where-Object { $_.Trim() })
+            $before = $tasks.Clone()
+            $seen   = "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)"
+        }
+        # Write to a temp file and swap it in, so a crash or a sync mid-write cannot truncate the file
+        $save = {
+            param($path, $lines)
+            $tmp = "$path.tmp"
+            [IO.File]::WriteAllLines($tmp, [string[]]$lines)
+            try { if (Test-Path $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) } else { [IO.File]::Move($tmp, $path) } }
+            catch { [IO.File]::WriteAllLines($path, [string[]]$lines); Remove-Item $tmp -ErrorAction SilentlyContinue }
+        }
+        . $read
 
         # Routine: on a new day, log yesterday's unfinished routine tasks as missed and add today's;
         # timed ones are added at the top on the first t at or after their time.
@@ -86,8 +105,8 @@ function t {
             if ($newDay) {
                 if ($prevDay) {
                     $prev = [datetime]::ParseExact($prevDay, 'yyyy-MM-dd', $null)
-                    foreach ($t in $added) { if ($tasks -contains $t) { $log += "$prevDay missed: $t" } }
-                    $tasks = @($tasks | Where-Object { $added -notcontains $_ })
+                    foreach ($x in $added) { if (@($tasks | Where-Object { & $isOf $_ @($x) }).Count) { $log += "$prevDay missed: $x" } }
+                    $tasks = @($tasks | Where-Object { -not (& $isOf $_ $added) })
                     foreach ($r in $items) { if ($r.At -and $r.Days -contains [int]$prev.DayOfWeek -and $added -notcontains $r.Text) { $log += "$prevDay missed: $($r.Text)" } }
                     # Days without any t run (PC off), at most the last 31
                     $from = $prev.AddDays(1)
@@ -96,17 +115,16 @@ function t {
                         foreach ($r in $items) { if ($r.Days -contains [int]$x.DayOfWeek) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $($r.Text)" } }
                     }
                 }
-                $added = @($items | Where-Object { -not $_.At -and $_.Days -contains [int]$now.DayOfWeek -and $tasks -notcontains $_.Text } | ForEach-Object { $_.Text })
+                $added = @(foreach ($r in $items) { if (-not $r.At -and $r.Days -contains [int]$now.DayOfWeek -and -not @($tasks | Where-Object { & $isOf $_ @($r.Text) }).Count) { $r.Text } })
                 $tasks = $added + $tasks
             }
-            $due = @($items | Where-Object { $_.At -and $_.At -le $now.TimeOfDay -and $_.Days -contains [int]$now.DayOfWeek -and $added -notcontains $_.Text -and $tasks -notcontains $_.Text } |
-                Sort-Object At, Line | ForEach-Object { $_.Text })
+            $due = @($items | Sort-Object At, Line | ForEach-Object { $r = $_; if ($r.At -and $r.At -le $now.TimeOfDay -and $r.Days -contains [int]$now.DayOfWeek -and $added -notcontains $r.Text -and -not @($tasks | Where-Object { & $isOf $_ @($r.Text) }).Count) { $r.Text } })
             if ($newDay -or $due.Count) {
                 $tasks = $due + $tasks
                 $added += $due
                 if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
-                [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
-                [IO.File]::WriteAllLines($LAST, [string[]](@($day) + $added))
+                & $save $TODO $tasks
+                & $save $LAST (@($day) + $added)
             }
 
             # Reminders: one scheduled task, re-armed for the next timed routine task after every
@@ -135,13 +153,14 @@ function t {
             }
         }
 
+        $before = $tasks.Clone()
+        $seen   = "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)"
+
         # Sync apps save conflicting edits as copies: todo-<PC>.txt (OneDrive), todo (<PC>'s conflicted copy ...).txt
         # (Dropbox), todo (1).txt or todo_conf(1).txt (Google Drive), todo 2.txt (iCloud). t and t list mention them, t merge merges them
-        $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)[-_ (].*\.(txt|last)$' } })
+        $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)[-_ (].*\.(txt|last|undo|age)$' } })
     }
 
-    # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
-    $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
     $findDupe = { param($s) $k = & $titleOf $s; for ($i = 0; $i -lt $tasks.Count; $i++) { if ((& $titleOf $tasks[$i]) -eq $k) { return $i } }; -1 }
     # Describes when a routine entry runs, e.g. "weekdays at 14:00" or "every day, in the morning"
     $whenOf = {
@@ -170,7 +189,19 @@ function t {
         }
         , $p
     }
+    # Every change to todo.txt goes through here: refuse if the file changed since it was read (a sync or a
+    # reminder), append to done.txt, write safely, and keep the previous state for t undo. Returns $true if written.
+    $commit = {
+        param($what, $logLines = @())
+        if ("$((Get-Item $TODO).LastWriteTimeUtc.Ticks)" -ne $seen) { & $say 'todo.txt changed meanwhile (a sync or a reminder); nothing was changed. Run it again.' Yellow; return $false }
+        $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
+        if (@($logLines).Count) { [IO.File]::AppendAllText($DONE, (@($logLines) -join "`r`n") + "`r`n") }
+        & $save $TODO $tasks
+        [IO.File]::WriteAllLines($UNDO, [string[]](@("$len", "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)", $what) + $before))
+        $true
+    }
 
+    $logLines = @(); $doneMsg = $null
     switch ($cmd) {
         '' {
             if ($tasks.Count) {
@@ -200,10 +231,25 @@ function t {
                 't routine [list]         the routine, numbered, with when each runs'
                 't routine del <n|text>   remove from the routine'
                 't edit [routine]         open todo.txt (or routine.txt) in your editor'
+                't undo                   take back the last change to your tasks'
                 't merge                  merge conflict copies from your sync app'
                 't setup | t uninstall    install or remove'
             ) | ForEach-Object { & $say $_ }
             & $say "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." DarkGray
+            return
+        }
+        'undo' {
+            if (-not (Test-Path $UNDO)) { & $say 'Nothing to undo.' DarkGray; return }
+            $u = @([IO.File]::ReadAllLines($UNDO))
+            $same = $u[1] -eq $seen
+            if (-not $same -and (& $ask 'todo.txt changed since then. Undo anyway? [y/N]') -ne 'y') { return }
+            & $save $TODO @($u | Select-Object -Skip 3)
+            # done.txt is cut back only when nothing else has touched the list, so routine "missed:" lines are never lost
+            if ($same -and (Test-Path $DONE) -and (Get-Item $DONE).Length -gt [long]$u[0]) { $fs = [IO.File]::OpenWrite($DONE); $fs.SetLength([long]$u[0]); $fs.Close() }
+            elseif (-not $same) { & $say 'done.txt was left as it is.' DarkGray }
+            Remove-Item $UNDO
+            & $say "undone: $($u[2])" DarkGray
+            t
             return
         }
         'done' {
@@ -212,10 +258,14 @@ function t {
             if ($rest.Count) {
                 $pick = & $select 'done'
                 if ($null -eq $pick) { return }
-                $pick | ForEach-Object { & $say "  $($tasks[$_])" }
-                if ((& $ask 'Mark done? [y/N]') -ne 'y') { return }
+                # One task is done at once (t undo takes it back); several are shown first
+                if (@($pick).Count -gt 1) {
+                    $pick | ForEach-Object { & $say "  $($tasks[$_])" }
+                    if ((& $ask 'Mark done? [y/N]') -ne 'y') { return }
+                    $doneMsg = "done: $(@($pick).Count) tasks"
+                } else { $doneMsg = "done: $(& $titleOf $tasks[$pick[0]])" }
             }
-            $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day $($tasks[$_])`r`n") }
+            $logLines = @($pick | ForEach-Object { "$day $($tasks[$_])" })
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
         'del' {
@@ -224,7 +274,7 @@ function t {
             if ($rest.Count) { $pick = & $select 'del'; if ($null -eq $pick) { return } }
             $pick | ForEach-Object { & $say "  $($tasks[$_])" }
             if ((& $ask 'Delete? [y/N]') -ne 'y') { return }
-            $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day dropped: $($tasks[$_])`r`n") }
+            $logLines = @($pick | ForEach-Object { "$day dropped: $($tasks[$_])" })
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
         'top' {
@@ -263,11 +313,11 @@ function t {
         'add' {
             # & $ask takes the line as typed, so ' ; # | & and $ need no quoting
             while ($line = "$(& $ask 'Task')".Trim()) {
+                . $read   # a reminder or a sync may have changed the file while this prompt was open
                 $i = & $findDupe $line
                 if ($i -ge 0) { & $say "  already on your list (#$($i + 1))." DarkGray; continue }
                 $tasks += $line
-                [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
-                & $say '  parked.' DarkGray
+                if (& $commit 'add') { & $say '  parked.' DarkGray }
             }
             return
         }
@@ -293,11 +343,11 @@ function t {
                         # brought back, and routine tasks, which the routine adds itself
                         $since = $c.LastWriteTime.AddDays(-7).ToString('yyyy-MM-dd')
                         $gone = @($doneLines | Where-Object { $_.Length -gt 11 -and $_.Substring(0, 10) -ge $since } | ForEach-Object { $_.Substring(11) -replace '^missed: ', '' })
-                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and @($items).Text -notcontains $_ })
+                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and -not (& $isOf $_ @($items | ForEach-Object { $_.Text })) })
                         $drop += $c
                     }
                     '^done' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
-                    '\.last$' { $drop += $c }   # the tool's own state; the main routine.last wins
+                    '\.(last|undo|age)$' { $drop += $c }   # the tool's own state; the main files win
                     default { & $say "$($c.Name): compare it with routine.txt (t routine), then delete it." Yellow }
                 }
             }
@@ -308,9 +358,11 @@ function t {
             if ($newDone.Count) { & $say "Add $($newDone.Count) line(s) to done.txt" }
             & $say "Then delete: $(($drop | ForEach-Object { $_.Name }) -join ', ')"
             if ((& $ask 'Merge? [y/N]') -ne 'y') { return }
-            if ($newDone.Count) { [IO.File]::AppendAllText($DONE, ($newDone -join "`r`n") + "`r`n") }
-            $drop | Remove-Item
             $tasks += $newTasks
+            if (-not (& $commit 'merge' $newDone)) { return }
+            $drop | Remove-Item
+            t
+            return
         }
         { $_ -in 'edit', 'edit routine' } {
             # A terminal editor first: $VISUAL/$EDITOR, then nvim, vim, nano, Microsoft Edit; Notepad as the fallback
@@ -343,7 +395,7 @@ function t {
                 $items += $r
                 & $say "  added to your routine: $($r.Text) ($(& $whenOf $r))" DarkGray
             }
-            if ($lines.Count -gt $count) { [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines) }
+            if ($lines.Count -gt $count) { & $save $ROUTINE $lines }
             return
         }
         'routine del' {
@@ -356,7 +408,7 @@ function t {
             $gone = @($pick | ForEach-Object { $items[$_].Line })
             $n = 0
             $lines = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; if ($n -notin $gone) { $l } })
-            [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines)
+            & $save $ROUTINE $lines
             & $say "  removed $($gone.Count) from your routine." DarkGray
             return
         }
@@ -488,12 +540,12 @@ function t {
             $i = & $findDupe ($a -join ' ')
             if ($i -ge 0) { & $say "already on your list (#$($i + 1))." DarkGray; return }
             $tasks += ($a -join ' ')
-            [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
-            & $say 'parked.' DarkGray
+            if (& $commit 'park') { & $say 'parked.' DarkGray }
             return
         }
     }
-    [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
+    if (-not (& $commit $cmd $logLines)) { return }
+    if ($doneMsg) { & $say "$doneMsg  (t undo to revert)" Green }
     t
 }
 

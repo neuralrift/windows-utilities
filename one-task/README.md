@@ -8,7 +8,8 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 - Tasks live in the task folder chosen at setup, by default `Apps\one-task\` in your OneDrive, Google Drive, Dropbox or iCloud Drive folder:
   - `todo.txt`: one task per line, line 1 is the current task. Any text editor works, on the PC or your phone; blank lines are ignored.
   - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Nothing reads it back.
-  - `routine.txt`: your daily routine (see below). `routine.last` is the tool's own record of the current routine day; leave it alone.
+  - `routine.txt`: your daily routine (see below).
+  - `routine.last` and `todo.undo`: the tool's own records (the current routine day, and the state before your last change); leave them alone.
 - Sync between PCs is the sync app's job; the tool has no sync code, network calls or accounts.
 
 ## Requirements
@@ -51,8 +52,9 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t <text> // <note>` | Parks a task with a note (see Notes) |
 | `t add` | Asks for tasks one per line until an empty line; takes any characters, including `'` |
 | `t done` | Logs the current task to `done.txt` and shows the next one |
-| `t done 2 4` | Logs tasks 2 and 4 (numbers from `t list`), after confirmation |
-| `t done <text>` | Logs the one task containing the text, after confirmation; if several match, prints them with their numbers |
+| `t done 3`, `t done <text>` | Logs that task (number from `t list`, or the one task containing the text) and says which; if several match the text, prints them with their numbers |
+| `t done 2 4` | Logs several tasks, after confirmation |
+| `t undo` | Takes back the last change to your tasks, including what it logged |
 | `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
 | `t top 3`, `t top <text>` | Makes that task the current one |
 | `t skip` | Moves the current task to the bottom |
@@ -73,7 +75,7 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 
 `t remind` is run by the reminder task; you don't need it.
 
-`list`, `edit`, `remind`, `merge`, `skip`, `add`, `help`, `setup` and `uninstall` only act when typed alone (`edit` also takes `routine`), so `t list groceries` and `t help Sam move` park a task. Everything after `t routine` is a routine line, unless it starts with `list`, `add` or `del`.
+`list`, `edit`, `remind`, `merge`, `skip`, `add`, `undo`, `help`, `setup` and `uninstall` only act when typed alone (`edit` also takes `routine`), so `t list groceries` and `t help Sam move` park a task. Everything after `t routine` is a routine line, unless it starts with `list`, `add` or `del`.
 
 `t edit` uses a terminal editor when it finds one: `$env:VISUAL` or `$env:EDITOR` if set, otherwise the first of `nvim`, `vim`, `nano` and `edit` (Microsoft Edit) on your PATH, and Notepad as the fallback. With a terminal editor, `t` shows your current task when you close it.
 
@@ -156,7 +158,9 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 - **Reserved first word:** `remind` cannot be parked as a one-word task.
 - **Two PCs on the same day:** if both start a new routine day before the files sync, `done.txt` can get duplicate `missed:` lines.
 - **PowerShell syntax in tasks:** `'`, `;`, `#`, `|`, `&`, `(` and `$` are read by PowerShell before `t` runs; a lone `'` makes it wait for a closing quote (`>>`). Quote the task (`t "don't forget"`) or use `t add`, which takes the line as typed.
-- **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a sync). The confirmation shows the tasks before anything is logged.
+- **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a sync). It says which task it logged; `t undo` takes a wrong one back.
+- **Undo is one step,** for the task list and `done.txt` only. It does not undo routine changes or bring back merged conflict copies. If the list changed in between (a sync, a new routine day), it asks first and leaves `done.txt` alone.
+- **Changes from outside:** if `todo.txt` changes while `t` waits for your answer (a sync or a reminder), `t` changes nothing and asks you to run the command again.
 - **Several PCs:** if Documents is synced (OneDrive folder backup does this), the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC. The task folder path must match as well.
 - **Google Drive streaming:** in the default streaming mode files are online-only, so the first `t` after a restart can be slow while they download. Mark the task folder "Available offline" to avoid it.
 - **Sync app detection:** only the default locations are found. Pick "Other folder" for anything else.

@@ -69,6 +69,37 @@ try {
     Is 'fresh copy'   (File todo.txt)            'review inbox'
     Is 'routine list' (Run routine)              '1. review inbox|  every day, in the morning|2. timesheet|  weekdays at 14:00'
     Is 'routine dupe' (Run routine Review Inbox) '  already in your routine: Review Inbox'
+
+    # --- step 2: reliability ---
+    Reset -Routine 'review inbox'
+    Run note check finance | Out-Null
+    At '2026-11-10 09:00'; Run | Out-Null
+    Is 'note: one copy'   (File todo.txt)      'review inbox'
+    Is 'note: missed'     (File done.txt)      '2026-11-09 missed: review inbox'
+    Reset -Routine 'review inbox'
+    Run split a / b | Out-Null
+    At '2026-11-10 09:00'; Run | Out-Null
+    Is 'split: replaced'  (File todo.txt)      'review inbox'
+    Reset 'a'
+    Run b | Out-Null
+    Is 'no tmp left'      (Test-Path "$dir\todo.txt.tmp")   'False'
+    Reset 'a', 'b', 'c'
+    Run done | Out-Null
+    Is 'undo done'        (Run undo)           "undone: done|$arrow a"
+    Is 'undo todo'        (File todo.txt)      'a|b|c'
+    Is 'undo done.txt'    (File done.txt)      ''
+    Is 'undo twice'       (Run undo)           'Nothing to undo.'
+    Run skip | Out-Null; Run undo | Out-Null
+    Is 'undo skip'        (File todo.txt)      'a|b|c'
+    Is 'done by number'   (Run done 2)         "done: b  (t undo to revert)|$arrow a"
+    Is 'done by text'     (Run done c)         "done: c  (t undo to revert)|$arrow a"
+    Run undo | Out-Null
+    Is 'undo by text'     (File todo.txt)      'a|c'
+    Answers 'y'
+    Is 'done several'     (Run done 1 2)       '  a|  c|done: 2 tasks  (t undo to revert)|Nothing to do. Add one: t <task>'
+    Is 'undo word'        (Run undo the mess)  'parked.'
+    Run x | Out-Null; Run undo | Out-Null
+    Is 'undo park'        (File todo.txt)      'undo the mess'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

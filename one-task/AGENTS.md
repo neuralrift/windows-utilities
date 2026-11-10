@@ -43,7 +43,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 - `-Folder` is the task folder as is; `-Root` is a synced folder and means `<root>\Apps\one-task` (older profile lines use it). Without either, `$env:OneDrive\Apps\one-task`. Don't name locals `$folder` or `$root`: names are case-insensitive and would shadow the parameters.
 - Setup detects synced folders from known places only (OneDrive env vars, `My Drive` on any drive or in the user folder, Dropbox `info.json`, `%USERPROFILE%\Dropbox`, `%USERPROFILE%\iCloudDrive`) and always offers "Other folder". Switching folders offers to move the files from the folder in the old profile line.
 - Conflict copies (`^(todo|done|routine)[-_ (].*\.(txt|last)$`, covering OneDrive, Dropbox, Google Drive and iCloud names) are only looked for by bare `t`, `t list` and `t merge`, which keeps capture fast and silent. `t merge` confirms before changing anything; it never merges `routine-*.txt`.
-- `$OneTaskNow`, if set in the session, replaces the clock; it exists for tests.
+- Test hooks, read from the session: `$OneTaskNow` replaces the clock, `$OneTaskNoArm` stops the scheduled task being registered, and `$OneTaskAnswers` (a `[Collections.Queue]`) answers prompts. All prompts go through `$ask` and all output through `$say`, which holds the colour palette and honours `NO_COLOR`.
 - PowerShell variable names are case-insensitive: don't reuse a name such as `$TODO`/`$todo` for two things.
 
 ## Rules for changes
@@ -58,31 +58,18 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 
 ## Before finishing any change
 
-Run this in both PS 5.1 and PS 7 against a temporary folder (dot-source `t.ps1 -Folder <temp>`), then delete the folder:
+Run `test.ps1` in both editions; it uses only a temp folder and removes it:
 
-```
-t                       # -> "Nothing to do..."
-t write report; t call bank
-t                       # -> write report
-t skip                  # -> call bank
-t now fix bug           # -> fix bug
-t done                  # -> call bank   (done.txt gains "fix bug")
-t done                  # -> write report
-t list groceries        # -> parked.
-t split a / b           # -> write report: a
-t done 9                # -> "No such task number"
-t done report           # -> lists both "write report" steps, logs nothing
-t done 2                # answer y -> logs "write report: b"
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File test.ps1
+pwsh -NoProfile -File test.ps1
 ```
 
-Then check the newer commands: `t help` and `t --help` print the list while `t help Sam move` parks; parking `Write Report` after `write report` says "already on your list"; `t now <existing>` moves it up; `t x // note`, `t note more` and `t list` show notes; `t top 3`, `t top <text>`, `t split` keeping the note on step one; `t del 2` answered `n` then `y` logs `dropped:`; `t add` fed `don't forget; milk & eggs # now` parks it as typed; `t routine weekdays 14:00 timesheet`, `t routine mon,thu 17:00 x`, `t routine sat, sun y` (reported as weekends), `t routine list of chores` (a line, not a list), a duplicate, and `t routine add` fed lines at the prompt; `t routine` and `t routine list` list; `t routine del 9` (no such number), `t routine del <text>` answered `n`, `t routine del 1 2` answered `y`; `t edit routines` with `$env:EDITOR` set to `cmd /c echo` receives the routine path; `t edit slides` parks.
+Add a case for every behaviour you change. `Run <words>` returns what `t <words>` printed, joined with `|`; `Answers 'y', 'n'` queues replies to prompts; `At '<date time>'` moves the clock; `File todo.txt` returns a file's lines.
 
-For the routine, write a `routine.txt` with untimed, `weekdays`, `sat,sun HH:MM` and single-word lines, then step `$OneTaskNow` through: a weekday morning, the same day after a timed task (added once only), the next day (yesterday's leftovers logged as missed), a jump over skipped days (each logged), and a weekend day. Check `todo.txt`, `done.txt` and `routine.last` after each step.
+A script cannot check these, so do them by hand when you touch that area:
 
-For reminders, use the real clock: create `HKCU\Software\OneTask` with an empty `Stamp` and a temp `routine.txt` with one task two minutes ago and one in 30 minutes. The first `t` must register `OneTask` with logon, event and time triggers; a second `t` must not re-register. Add two more past-time tasks, run `Start-ScheduledTask OneTask` and check for one batched toast and `LastTaskResult` 0. Then uninstall (task and key gone) and restore any real install with `setup`.
-
-For `merge`, put `todo-PC.txt`, `done-PC.txt`, `routine-PC.last` and `routine-PC.txt` next to the main files, with a copy that holds a routine task, a duplicate, a task done today, a task done years ago and a new task. Answer `n` (nothing changes) and `y` (only the old and new tasks are added, the done line is appended, three copies deleted, `routine-PC.txt` kept). If `HKCU\Software\OneTask` exists, set its `Stamp` to the temp `routine.txt`'s write time first and restore it after, so the real reminder task is not re-registered.
-
-For setup detection, pipe `99` to `t.ps1 setup`: it prints the menu and stops without changing anything. Fake Google Drive, Dropbox and iCloud by pointing `USERPROFILE`/`LOCALAPPDATA` at a temp folder with those subfolders and a Dropbox `info.json`.
-
-For `setup`/`uninstall`, pass `-Folder <temp>`, check both `profile.ps1` files, and confirm `uninstall` leaves profiles, policy and `HKCU\Software\OneTask` as they were.
+- Reminders, with the real clock: create `HKCU\Software\OneTask` with an empty `Stamp` and a temp `routine.txt` with one task two minutes ago and one in 30 minutes. The first `t` must register `OneTask` with logon, event and time triggers; a second `t` must not re-register. Add two more past-time tasks, run `Start-ScheduledTask OneTask` and check for one batched toast and `LastTaskResult` 0. Then uninstall (task and key gone) and restore any real install with `setup`.
+- Setup detection: pipe `99` to `t.ps1 setup`; it prints the menu and stops without changing anything. Fake Google Drive, Dropbox and iCloud by pointing `USERPROFILE`/`LOCALAPPDATA` at a temp folder with those subfolders and a Dropbox `info.json`.
+- `setup`/`uninstall`: pass `-Folder <temp>`, check both `profile.ps1` files, and confirm `uninstall` leaves profiles, policy and `HKCU\Software\OneTask` as they were.
+- `t edit`: with `$env:EDITOR` set to `cmd /c echo` it must receive the file path.

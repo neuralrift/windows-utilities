@@ -40,9 +40,15 @@ function t {
     $key   = 'HKCU:\Software\OneTask'
     $now   = if ($OneTaskNow) { [datetime]$OneTaskNow } else { Get-Date }   # $OneTaskNow fakes the clock in tests
     $day   = $now.ToString('yyyy-MM-dd')
+    # Test hooks: $OneTaskNow fakes the clock, $OneTaskNoArm leaves the scheduled task alone,
+    # $OneTaskAnswers (a [Collections.Queue]) answers prompts in order
+    $ask = { param($prompt) if ($OneTaskAnswers -is [Collections.Queue]) { if ($OneTaskAnswers.Count) { "$($OneTaskAnswers.Dequeue())" } else { '' } } else { Read-Host $prompt } }
+    # One palette: Cyan current task, Gray other tasks, DarkGray notes and hints, Green done or on track,
+    # Yellow needs attention, Red missed or error. NO_COLOR (any value) turns colour off.
+    $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
 
     if ($cmd -notin 'setup', 'uninstall') {
-        if (-not $dir) { Write-Host 'No task folder set. Run: t setup' -ForegroundColor Yellow; return }
+        if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
         $tasks = @([IO.File]::ReadAllLines($TODO) | Where-Object { $_.Trim() })
 
@@ -106,7 +112,7 @@ function t {
             # Reminders: one scheduled task, re-armed for the next timed routine task after every
             # reminder run and whenever routine.txt changes. Setup creates $key; without it nothing is armed.
             $stamp = "$((Get-Item $ROUTINE).LastWriteTimeUtc.Ticks)"
-            if ((Test-Path $key) -and ($cmd -eq 'remind' -or (Get-ItemProperty $key).Stamp -ne $stamp)) {
+            if (-not $OneTaskNoArm -and (Test-Path $key) -and ($cmd -eq 'remind' -or (Get-ItemProperty $key).Stamp -ne $stamp)) {
                 $next = $null
                 for ($x = 0; $x -le 7 -and -not $next; $x++) {
                     $d = $now.Date.AddDays($x)
@@ -151,15 +157,15 @@ function t {
         $list = @($list)
         if (@($rest -notmatch '^\d+$').Count -eq 0) {
             $p = @($rest | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
-            if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $list.Count }).Count) { Write-Host "No such number. See: $listCmd" -ForegroundColor Yellow; return }
+            if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $list.Count }).Count) { & $say "No such number. See: $listCmd" Yellow; return }
             return , $p
         }
         $text = $rest -join ' '
         $p = @(0..($list.Count - 1) | Where-Object { $list[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-        if (-not $p.Count) { Write-Host "Nothing matches '$text'." -ForegroundColor Yellow; return }
+        if (-not $p.Count) { & $say "Nothing matches '$text'." Yellow; return }
         if ($p.Count -gt 1) {
-            $p | ForEach-Object { Write-Host "$($_ + 1). $($list[$_])" }
-            Write-Host "Several match. Use: t $verb <number>" -ForegroundColor DarkGray
+            $p | ForEach-Object { & $say "$($_ + 1). $($list[$_])" }
+            & $say "Several match. Use: t $verb <number>" DarkGray
             return
         }
         , $p
@@ -169,11 +175,11 @@ function t {
         '' {
             if ($tasks.Count) {
                 $parts = $tasks[0] -split ' // ', 2
-                Write-Host "$([char]0x25B6) $($parts[0])" -ForegroundColor Cyan
-                if ($parts.Count -gt 1) { Write-Host "  $($parts[1])" -ForegroundColor DarkGray }
+                & $say "$([char]0x25B6) $($parts[0])" Cyan
+                if ($parts.Count -gt 1) { & $say "  $($parts[1])" DarkGray }
             }
-            elseif (-not $OneTaskOpening) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
-            if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
+            elseif (-not $OneTaskOpening) { & $say 'Nothing to do. Add one: t <task>' DarkGray }
+            if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
             return
         }
         'help' {
@@ -196,8 +202,8 @@ function t {
                 't edit [routine]         open todo.txt (or routine.txt) in your editor'
                 't merge                  merge conflict copies from your sync app'
                 't setup | t uninstall    install or remove'
-            ) | ForEach-Object { Write-Host $_ }
-            Write-Host "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." -ForegroundColor DarkGray
+            ) | ForEach-Object { & $say $_ }
+            & $say "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." DarkGray
             return
         }
         'done' {
@@ -206,8 +212,8 @@ function t {
             if ($rest.Count) {
                 $pick = & $select 'done'
                 if ($null -eq $pick) { return }
-                $pick | ForEach-Object { Write-Host "  $($tasks[$_])" }
-                if ((Read-Host 'Mark done? [y/N]') -ne 'y') { return }
+                $pick | ForEach-Object { & $say "  $($tasks[$_])" }
+                if ((& $ask 'Mark done? [y/N]') -ne 'y') { return }
             }
             $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day $($tasks[$_])`r`n") }
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
@@ -216,16 +222,16 @@ function t {
             if (-not $tasks.Count) { return }
             $pick = @(0)
             if ($rest.Count) { $pick = & $select 'del'; if ($null -eq $pick) { return } }
-            $pick | ForEach-Object { Write-Host "  $($tasks[$_])" }
-            if ((Read-Host 'Delete? [y/N]') -ne 'y') { return }
+            $pick | ForEach-Object { & $say "  $($tasks[$_])" }
+            if ((& $ask 'Delete? [y/N]') -ne 'y') { return }
             $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day dropped: $($tasks[$_])`r`n") }
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
         'top' {
-            if (-not $rest.Count) { Write-Host 'Usage: t top <number|text>' -ForegroundColor Yellow; return }
+            if (-not $rest.Count) { & $say 'Usage: t top <number|text>' Yellow; return }
             $pick = & $select 'top'
             if ($null -eq $pick) { return }
-            if (@($pick).Count -gt 1) { Write-Host 'Choose one task.' -ForegroundColor Yellow; return }
+            if (@($pick).Count -gt 1) { & $say 'Choose one task.' Yellow; return }
             $tasks = @($tasks[$pick[0]]) + @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -ne $pick[0]) { $tasks[$i] } })
         }
         'skip' {
@@ -236,47 +242,47 @@ function t {
             if (-not $rest.Count) { return }
             $new = $rest -join ' '
             $i = & $findDupe $new
-            if ($i -ge 0) { Write-Host 'Already on your list; moved to the top.' -ForegroundColor DarkGray; $new = $tasks[$i]; $tasks = @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } }) }
+            if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i]; $tasks = @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } }) }
             $tasks = @($new) + $tasks
         }
         'note' {
             if (-not $tasks.Count) { return }
-            $text = if ($rest.Count) { $rest -join ' ' } else { Read-Host 'Note' }
+            $text = if ($rest.Count) { $rest -join ' ' } else { & $ask 'Note' }
             if (-not "$text".Trim()) { return }
             $tasks[0] = if ($tasks[0] -match ' // ') { "$($tasks[0]); $text" } else { "$($tasks[0]) // $text" }
         }
         'split' {
             # PowerShell treats ";" as a statement separator, so steps are separated by " / "
             $steps = @(($rest -join ' ') -split '\s+/\s+' | Where-Object { $_.Trim() })
-            if (-not $tasks.Count -or $steps.Count -lt 2) { Write-Host 'Usage: t split <step> / <step> ...' -ForegroundColor Yellow; return }
+            if (-not $tasks.Count -or $steps.Count -lt 2) { & $say 'Usage: t split <step> / <step> ...' Yellow; return }
             $parts = $tasks[0] -split ' // ', 2   # the note stays with the first step
             $new = @($steps | ForEach-Object { "$($parts[0]): $($_.Trim())" })
             if ($parts.Count -gt 1) { $new[0] += " // $($parts[1])" }
             $tasks = $new + @($tasks | Select-Object -Skip 1)
         }
         'add' {
-            # Read-Host takes the line as typed, so ' ; # | & and $ need no quoting
-            while ($line = "$(Read-Host 'Task')".Trim()) {
+            # & $ask takes the line as typed, so ' ; # | & and $ need no quoting
+            while ($line = "$(& $ask 'Task')".Trim()) {
                 $i = & $findDupe $line
-                if ($i -ge 0) { Write-Host "  already on your list (#$($i + 1))." -ForegroundColor DarkGray; continue }
+                if ($i -ge 0) { & $say "  already on your list (#$($i + 1))." DarkGray; continue }
                 $tasks += $line
                 [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
-                Write-Host '  parked.' -ForegroundColor DarkGray
+                & $say '  parked.' DarkGray
             }
             return
         }
         'list' {
-            if (-not $tasks.Count) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray; return }
+            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             for ($i = 0; $i -lt $tasks.Count; $i++) {
                 $parts = $tasks[$i] -split ' // ', 2
-                Write-Host "$($i + 1). $($parts[0])" -ForegroundColor $(if ($i) { 'Gray' } else { 'Cyan' }) -NoNewline
-                Write-Host $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) -ForegroundColor DarkGray
+                & $say "$($i + 1). $($parts[0])" $(if ($i) { 'Gray' } else { 'Cyan' }) -NoNewline
+                & $say $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) DarkGray
             }
-            if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
+            if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
             return
         }
         'merge' {
-            if (-not $copies.Count) { Write-Host 'No conflict copies.' -ForegroundColor DarkGray; return }
+            if (-not $copies.Count) { & $say 'No conflict copies.' DarkGray; return }
             $doneLines = @(if (Test-Path $DONE) { [IO.File]::ReadAllLines($DONE) })
             $newTasks = @(); $newDone = @(); $drop = @()
             foreach ($c in $copies) {
@@ -292,16 +298,16 @@ function t {
                     }
                     '^done' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
                     '\.last$' { $drop += $c }   # the tool's own state; the main routine.last wins
-                    default { Write-Host "$($c.Name): compare it with routine.txt (t routine), then delete it." -ForegroundColor Yellow }
+                    default { & $say "$($c.Name): compare it with routine.txt (t routine), then delete it." Yellow }
                 }
             }
             if (-not $drop.Count) { return }
             $newTasks = @($newTasks | Select-Object -Unique)
             $newDone  = @($newDone | Select-Object -Unique)
-            if ($newTasks.Count) { Write-Host 'Add to the bottom of todo.txt:'; $newTasks | ForEach-Object { Write-Host "  $_" } }
-            if ($newDone.Count) { Write-Host "Add $($newDone.Count) line(s) to done.txt" }
-            Write-Host "Then delete: $(($drop | ForEach-Object { $_.Name }) -join ', ')"
-            if ((Read-Host 'Merge? [y/N]') -ne 'y') { return }
+            if ($newTasks.Count) { & $say 'Add to the bottom of todo.txt:'; $newTasks | ForEach-Object { & $say "  $_" } }
+            if ($newDone.Count) { & $say "Add $($newDone.Count) line(s) to done.txt" }
+            & $say "Then delete: $(($drop | ForEach-Object { $_.Name }) -join ', ')"
+            if ((& $ask 'Merge? [y/N]') -ne 'y') { return }
             if ($newDone.Count) { [IO.File]::AppendAllText($DONE, ($newDone -join "`r`n") + "`r`n") }
             $drop | Remove-Item
             $tasks += $newTasks
@@ -317,41 +323,41 @@ function t {
             return
         }
         'routine list' {
-            if (-not $items.Count) { Write-Host 'No routine yet. Add one: t routine <task>' -ForegroundColor DarkGray; return }
+            if (-not $items.Count) { & $say 'No routine yet. Add one: t routine <task>' DarkGray; return }
             for ($i = 0; $i -lt $items.Count; $i++) {
-                Write-Host "$($i + 1). $($items[$i].Text)" -NoNewline
-                Write-Host "  $(& $whenOf $items[$i])" -ForegroundColor DarkGray
+                & $say "$($i + 1). $($items[$i].Text)" -NoNewline
+                & $say "  $(& $whenOf $items[$i])" DarkGray
             }
             return
         }
         'routine add' {
             # One line from the command line, or several typed at a prompt (any characters) until an empty line
-            $new = @(if ($rest.Count) { $rest -join ' ' } else { while ($line = "$(Read-Host 'Routine')".Trim()) { $line } })
+            $new = @(if ($rest.Count) { $rest -join ' ' } else { while ($line = "$(& $ask 'Routine')".Trim()) { $line } })
             $lines = @(if (Test-Path $ROUTINE) { [IO.File]::ReadAllLines($ROUTINE) })
             $count = $lines.Count
             foreach ($l in $new) {
                 $r = & $parseLine $l 0
                 if (-not $r) { continue }
-                if (@($items).Text -contains $r.Text) { Write-Host "  already in your routine: $($r.Text)" -ForegroundColor DarkGray; continue }
+                if (@($items).Text -contains $r.Text) { & $say "  already in your routine: $($r.Text)" DarkGray; continue }
                 $lines += ("$l".Trim() -replace '(?<=\b(sun|mon|tue|wed|thu|fri|sat))\s*,\s*(?=(sun|mon|tue|wed|thu|fri|sat)\b)', ',')
                 $items += $r
-                Write-Host "  added to your routine: $($r.Text) ($(& $whenOf $r))" -ForegroundColor DarkGray
+                & $say "  added to your routine: $($r.Text) ($(& $whenOf $r))" DarkGray
             }
             if ($lines.Count -gt $count) { [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines) }
             return
         }
         'routine del' {
-            if (-not $rest.Count) { Write-Host 'Usage: t routine del <number|text>  (numbers from t routine list)' -ForegroundColor Yellow; return }
-            if (-not $items.Count) { Write-Host 'Your routine is empty.' -ForegroundColor DarkGray; return }
+            if (-not $rest.Count) { & $say 'Usage: t routine del <number|text>  (numbers from t routine list)' Yellow; return }
+            if (-not $items.Count) { & $say 'Your routine is empty.' DarkGray; return }
             $pick = & $select 'routine del' (@($items).Text) 't routine list'
             if ($null -eq $pick) { return }
-            $pick | ForEach-Object { Write-Host "  $($items[$_].Text)  $(& $whenOf $items[$_])" }
-            if ((Read-Host 'Remove from your routine? [y/N]') -ne 'y') { return }
+            $pick | ForEach-Object { & $say "  $($items[$_].Text)  $(& $whenOf $items[$_])" }
+            if ((& $ask 'Remove from your routine? [y/N]') -ne 'y') { return }
             $gone = @($pick | ForEach-Object { $items[$_].Line })
             $n = 0
             $lines = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; if ($n -notin $gone) { $l } })
             [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines)
-            Write-Host "  removed $($gone.Count) from your routine." -ForegroundColor DarkGray
+            & $say "  removed $($gone.Count) from your routine." DarkGray
             return
         }
         'remind' {
@@ -387,13 +393,13 @@ function t {
                 & $add 'iCloud Drive' (Join-Path $env:USERPROFILE 'iCloudDrive')
 
                 $keys = @($found.Keys)
-                for ($i = 0; $i -lt $keys.Count; $i++) { Write-Host "$($i + 1). $($keys[$i])  $($found[$keys[$i]])" }
-                Write-Host "$($keys.Count + 1). Other folder"
-                $n = Read-Host 'Where should your tasks live? [1]'
+                for ($i = 0; $i -lt $keys.Count; $i++) { & $say "$($i + 1). $($keys[$i])  $($found[$keys[$i]])" }
+                & $say "$($keys.Count + 1). Other folder"
+                $n = & $ask 'Where should your tasks live? [1]'
                 if (-not $n) { $n = '1' }
                 if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $keys.Count) { $target = Join-Path $found[$keys[[int]$n - 1]] 'Apps\one-task' }
-                elseif ($n -eq "$($keys.Count + 1)") { $target = "$(Read-Host 'Folder for your tasks (used as is)')".Trim().Trim('"') }
-                if (-not $target) { Write-Host 'No folder chosen; setup stopped.' -ForegroundColor Yellow; return }
+                elseif ($n -eq "$($keys.Count + 1)") { $target = "$(& $ask 'Folder for your tasks (used as is)')".Trim().Trim('"') }
+                if (-not $target) { & $say 'No folder chosen; setup stopped.' Yellow; return }
             }
             New-Item $target -ItemType Directory -Force | Out-Null
             $target = (Resolve-Path $target).Path
@@ -405,7 +411,7 @@ function t {
                 $from = $Matches[2].Replace("''", "'")
                 if ($Matches[1] -eq 'Root') { $from = Join-Path $from 'Apps\one-task' }
                 if ($from -ne $target -and (Test-Path (Join-Path $from 'todo.txt')) -and -not (Test-Path (Join-Path $target 'todo.txt')) -and
-                    (Read-Host "Move your tasks from $from? [y/N]") -eq 'y') { Get-ChildItem $from -File | Move-Item -Destination $target }
+                    (& $ask "Move your tasks from $from? [y/N]") -eq 'y') { Get-ChildItem $from -File | Move-Item -Destination $target }
             }
             $r = Join-Path $dir 'routine.txt'
             if (-not (Test-Path $r)) {
@@ -431,11 +437,11 @@ function t {
                 $lines = @(if (Test-Path $p) { [IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) } })
                 New-Item (Split-Path $p) -ItemType Directory -Force | Out-Null
                 [IO.File]::WriteAllLines($p, [string[]]($lines + $line), (New-Object Text.UTF8Encoding $true))
-                Write-Host "Profile: $p"
+                & $say "Profile: $p"
             }
             Get-ChildItem ($profs | Split-Path) -Filter '*profile.ps1' -ErrorAction SilentlyContinue |
                 Select-String -Pattern '[\\/"'' ]t\.ps1' | Where-Object { -not $_.Line.EndsWith($OneTaskMarker) } |
-                ForEach-Object { Write-Host "Old t line, remove it: $($_.Path):$($_.LineNumber)" -ForegroundColor Yellow }
+                ForEach-Object { & $say "Old t line, remove it: $($_.Path):$($_.LineNumber)" Yellow }
 
             # The profile only runs if the execution policy allows local scripts
             $gpo  = @('MachinePolicy', 'UserPolicy' | ForEach-Object { "$(Get-ExecutionPolicy -Scope $_)" } | Where-Object { $_ -ne 'Undefined' })
@@ -443,17 +449,17 @@ function t {
             $eff  = if ($gpo.Count) { $gpo[0] } elseif ($user -ne 'Undefined') { $user } else { "$(Get-ExecutionPolicy -Scope LocalMachine)" }
             if ($eff -eq 'Undefined') { $eff = if ($PSVersionTable.PSEdition -eq 'Core') { 'RemoteSigned' } else { 'Restricted' } }
             if ($eff -in 'Restricted', 'AllSigned') {
-                if ($gpo.Count) { Write-Host "Group Policy sets the execution policy to $eff, so the profile cannot load t." -ForegroundColor Yellow }
+                if ($gpo.Count) { & $say "Group Policy sets the execution policy to $eff, so the profile cannot load t." Yellow }
                 else {
                     Set-ItemProperty $key PrevPolicy $user
                     Set-ItemProperty $key Edition $PSVersionTable.PSEdition
                     # Errors when the Process scope overrides it (as with -ExecutionPolicy Bypass); checked below instead
                     try { Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop } catch { }
-                    if ("$(Get-ExecutionPolicy -Scope CurrentUser)" -eq 'RemoteSigned') { Write-Host "Execution policy (CurrentUser): $user -> RemoteSigned" }
-                    else { Write-Host 'Could not set the execution policy to RemoteSigned.' -ForegroundColor Yellow }
+                    if ("$(Get-ExecutionPolicy -Scope CurrentUser)" -eq 'RemoteSigned') { & $say "Execution policy (CurrentUser): $user -> RemoteSigned" }
+                    else { & $say 'Could not set the execution policy to RemoteSigned.' Yellow }
                 }
             }
-            Write-Host "Tasks: $dir. Open a new terminal to see your task." -ForegroundColor DarkGray
+            & $say "Tasks: $dir. Open a new terminal to see your task." DarkGray
             return
         }
         'uninstall' {
@@ -462,28 +468,28 @@ function t {
                 $lines = @([IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) })
                 if (@($lines | Where-Object { $_.Trim() }).Count) { [IO.File]::WriteAllLines($p, [string[]]$lines, (New-Object Text.UTF8Encoding $true)) }
                 else { Remove-Item $p }
-                Write-Host "Profile cleaned: $p"
+                & $say "Profile cleaned: $p"
             }
-            if (Get-ScheduledTask OneTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask OneTask -Confirm:$false; Write-Host 'Reminder task removed' }
+            if (Get-ScheduledTask OneTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask OneTask -Confirm:$false; & $say 'Reminder task removed' }
             if (Test-Path $key) {
                 $k = Get-ItemProperty $key
-                if ($k.PrevPolicy -and $k.Edition -ne $PSVersionTable.PSEdition) { Write-Host "Run uninstall from the shell that ran setup ($($k.Edition) edition) to restore the execution policy." -ForegroundColor Yellow; return }
+                if ($k.PrevPolicy -and $k.Edition -ne $PSVersionTable.PSEdition) { & $say "Run uninstall from the shell that ran setup ($($k.Edition) edition) to restore the execution policy." Yellow; return }
                 # Only restore if nobody changed it since setup
                 if ($k.PrevPolicy -and "$(Get-ExecutionPolicy -Scope CurrentUser)" -eq 'RemoteSigned') {
                     try { Set-ExecutionPolicy $k.PrevPolicy -Scope CurrentUser -Force -ErrorAction Stop } catch { }
-                    Write-Host "Execution policy (CurrentUser) restored to $($k.PrevPolicy)"
+                    & $say "Execution policy (CurrentUser) restored to $($k.PrevPolicy)"
                 }
                 Remove-Item $key -Recurse
             }
-            if ($dir) { Write-Host "Your tasks were kept in $dir" -ForegroundColor DarkGray }
+            if ($dir) { & $say "Your tasks were kept in $dir" DarkGray }
             return
         }
         default {
             $i = & $findDupe ($a -join ' ')
-            if ($i -ge 0) { Write-Host "already on your list (#$($i + 1))." -ForegroundColor DarkGray; return }
+            if ($i -ge 0) { & $say "already on your list (#$($i + 1))." DarkGray; return }
             $tasks += ($a -join ' ')
             [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
-            Write-Host 'parked.' -ForegroundColor DarkGray
+            & $say 'parked.' DarkGray
             return
         }
     }

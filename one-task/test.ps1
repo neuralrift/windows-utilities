@@ -157,6 +157,35 @@ try {
     Is 'steps fresh'    (File todo.txt)                       'plan: review|plan: pick'
     Is 'routine shows'  (Run routine)                         '1. morning: stretch / shower|  weekdays at 07:00|2. plan: review / pick|  weekdays, in the morning'
     Is 'routine key'    (Run routine morning: other / thing)  '  already in your routine: morning'
+
+    # --- step 5: routine parsing ---
+    Reset
+    Is 'full day'     (Run routine Monday 2pm standup)       '  added to your routine: standup (mon at 14:00)'
+    Is 'range'        (Run routine mon-fri 9.30 mail)        '  added to your routine: mail (weekdays at 09:30)'
+    Is 'wrap range'   (Run routine fri-mon walk)             '  added to your routine: walk (sun,mon,fri,sat, in the morning)'
+    Is 'everyday'     (Run routine everyday 12am backup)     '  added to your routine: backup (every day at 00:00)'
+    Is 'typo day'     (Run routine weekdys 14:00 x)          "  'weekdys' looks like 'weekdays'|  Not added. To add it as written, type it at the prompt: t routine add"
+    Is 'typo list'    (Run routine mon,thr 9:00 x)           "  'mon,thr' looks like a list of days; use forms such as mon,thu or mon-fri|  Not added. To add it as written, type it at the prompt: t routine add"
+    Is 'bad time'     (Run routine 25:00 x)                  "  '25:00' looks like a time; use forms such as 14:00 or 2pm|  Not added. To add it as written, type it at the prompt: t routine add"
+    Is 'bad time 2'   (Run routine weekdays 13pm x)          "  '13pm' looks like a time; use forms such as 14:00 or 2pm|  Not added. To add it as written, type it at the prompt: t routine add"
+    Is 'not a time'   (Run routine 10 pushups)               '  added to your routine: 10 pushups (every day, in the morning)'
+    Is 'not a day'    (Run routine weekly report)            '  added to your routine: weekly report (every day, in the morning)'
+    Is 'the'          (Run routine the review)               '  added to your routine: the review (every day, in the morning)'
+    Is 'quiet'        (Run routine weekdays 14:00 quiet ts)  '  added to your routine: ts (weekdays at 14:00, quiet)'
+    Answers '25:00 odd name', 'y', ''
+    Is 'as written'   (Run routine add)                      "  '25:00' looks like a time; use forms such as 14:00 or 2pm|  added to your routine: 25:00 odd name (every day, in the morning)"
+    Is 'list warns'   ((Run routine).Split('|')[-1])         "  ? '25:00' looks like a time; use forms such as 14:00 or 2pm"
+    Reset -Routine '# keep me', '  weekdays   14:00   spaced  '
+    Run routine stretch | Out-Null
+    Is 'routine tidy' (File routine.txt)                     '# keep me|weekdays 14:00 spaced|stretch'
+    Reset '  spaced    out  ', '', 'x'
+    Run y | Out-Null
+    Is 'cleaned'      (File todo.txt)                        'spaced out|x|y'
+    Reset 'a', 'b // n', 'a'
+    Is 'same as'      (Run list)                             '1. a||2. b|  // n|3. a||  (same as #1)'
+    Reset -Routine 'weekdays 14:00 quiet timesheet', 'weekdays 14:00 loud one' -Now '2026-11-09 14:30'
+    Run | Out-Null
+    Is 'quiet on top' (File todo.txt)                        'timesheet|loud one'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

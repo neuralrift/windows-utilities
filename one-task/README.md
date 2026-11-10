@@ -115,6 +115,15 @@ The name and its `:` are needed: `t call mom / dad` stays one task.
 | `weekdays 14:00 timesheet` | Monday to Friday, at 14:00 |
 | `mon,thu 17:00 call supplier` | Monday and Thursday, at 17:00 |
 | `weekdays 07:00 morning: stretch / shower / plan` | Monday to Friday, at 07:00, as three steps |
+| `weekdays 14:00 quiet timesheet` | Monday to Friday, at 14:00, with no notification |
+
+Accepted forms:
+
+- **Days:** `daily` or `everyday`, `weekdays`, `weekends`, short or full day names (`mon`, `Monday`), lists (`mon,thu`) and ranges (`mon-fri`, `fri-mon`).
+- **Time:** `14:00`, `14.00`, `2pm` or `2:30pm`.
+- **`quiet`** right after a time: the task still moves to the top then, but shows no notification.
+
+`t routine <line>` tells you how it read the line. If the first word looks like a mistyped day or time (`weekdys`, `mon,thr`, `25:00`), it adds nothing and says why; `t routine add` lets you add such a line as written. `t routine` marks those lines with a yellow `?`.
 
 - On the first `t` of a day, untimed routine tasks for that day go to the top of `todo.txt`, in file order.
 - A timed task goes to the top at its time, with a Windows notification (see Reminders). If no reminder ran, it goes to the top on the first `t` after its time.
@@ -122,7 +131,6 @@ The name and its `:` are needed: `t call mom / dad` stays one task.
 - A routine task already in `todo.txt` is not added twice.
 - A routine line with steps puts each step on the list; each is done, or logged as missed, on its own, and the reminder names the routine once.
 - A routine task added during the day starts as if it had always been there: a timed one whose time has passed shows up at the next `t`; an untimed one starts with the next day it applies to.
-- Day lists may be written `mon,thu` or `mon, thu`.
 
 ## Reminders
 
@@ -166,8 +174,9 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 
 ## Known limitations
 
+- **Tidying:** `t` trims tasks and collapses runs of spaces when it next changes `todo.txt` or `routine.txt`; comments in `routine.txt` are kept. `t list` marks a task that repeats an earlier one with `(same as #n)`.
 - **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
-- **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, and `HH:MM` as a time. A routine task that should start with such a word cannot.
+- **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, a word such as `14:00` or `2pm` as a time, and `quiet` after a time as the quiet mark. A routine task that should start with such a word cannot.
 - **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
 - **Routine edits from another device:** the reminder schedule updates at the next `t` on this PC, or at the next reminder, logon or wake. Until then a new timed task can fire late.
 - **Notification source:** notifications show as coming from Windows PowerShell, because the tool registers no app of its own.

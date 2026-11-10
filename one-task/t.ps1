@@ -66,6 +66,7 @@ function t {
         if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
         $UNDO = Join-Path $dir 'todo.undo'
+        $agePath  = Join-Path $dir 'todo.age'
         # Dot-run (. $read): sets $tasks, $before and $seen in this scope
         $read = {
             # Lines are tidied as they are read (extra spaces, blank lines); the file is rewritten on the next change
@@ -268,10 +269,33 @@ function t {
         if (@($logLines).Count) { [IO.File]::AppendAllText($DONE, (@($logLines) -join "`r`n") + "`r`n") }
         & $save $TODO $tasks
         [IO.File]::WriteAllLines($UNDO, [string[]](@("$len", "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)", $what) + $before))
+        # Ages: new titles start today; titles gone from the list are dropped, but only once t undo can no longer bring them back
+        $ages = & $readAge
+        $titles = @($tasks | ForEach-Object { & $titleOf $_ })
+        $keep = $titles + @($before | ForEach-Object { & $titleOf $_ })
+        if ($renamed -and $ages.ContainsKey($renamed[0])) { $ages[$renamed[1]] = @{ Day = $ages[$renamed[0]].Day; Skips = 0 } }
+        foreach ($x in $titles) { if (-not $ages.ContainsKey($x)) { $ages[$x] = @{ Day = $day; Skips = 0 } } }
+        foreach ($x in @($ages.Keys)) { if ($x -ne "`t" -and $keep -notcontains $x) { $ages.Remove($x) } }
+        if ($bump -and $ages.ContainsKey($bump)) { $ages[$bump].Skips++ }
+        & $writeAge $ages
         $true
     }
+    # todo.age is the tool's own record of when each task was first seen and how often it was skipped:
+    # line 1 "hint <day>" (the last day a waiting hint was shown), then "<day><TAB><skips><TAB><title>".
+    # The table is title -> @{ Day; Skips }; the hint day sits under the key TAB, which cannot be a title.
+    $readAge = {
+        $h = @{}
+        foreach ($l in @(if (Test-Path $agePath) { [IO.File]::ReadAllLines($agePath) })) {
+            $p = $l -split "`t", 3
+            if ($p.Count -eq 3) { $h[$p[2]] = @{ Day = $p[0]; Skips = [int]$p[1] } } elseif ($l -like 'hint *') { $h["`t"] = $l.Substring(5) }
+        }
+        $h
+    }
+    $writeAge = { param($h) & $save $agePath (@("hint $($h["`t"])") + @($h.Keys | Where-Object { $_ -ne "`t" } | Sort-Object | ForEach-Object { "$($h[$_].Day)`t$($h[$_].Skips)`t$_" })) }
+    # "3w" or "5d" for a first-seen day; nothing for under three days
+    $ageOf = { param($d) $n = ($now.Date - [datetime]::ParseExact($d, 'yyyy-MM-dd', $null)).Days; if ($n -ge 14) { "$([int][Math]::Floor($n / 7))w" } elseif ($n -ge 3) { "${n}d" } }
 
-    $logLines = @(); $doneMsg = $null; $allDone = @()
+    $logLines = @(); $doneMsg = $null; $allDone = @(); $bump = $null; $renamed = $null
     switch ($cmd) {
         '' {
             if ($tasks.Count) {
@@ -281,6 +305,9 @@ function t {
                 if ($left -gt 1) { & $say "$([char]0x25B6) $($parts[0])" Cyan -NoNewline; & $say "  ($left steps left)" DarkGray }
                 else { & $say "$([char]0x25B6) $($parts[0])" Cyan }
                 if ($parts.Count -gt 1) { & $say "  $($parts[1])" DarkGray }
+                # A nudge, never a prompt: a task skipped again and again is probably too big or not wanted
+                $e = if (Test-Path $agePath) { (& $readAge)[$parts[0].Trim()] }
+                if ($e -and $e.Skips -ge 3) { & $say "skipped $($e.Skips) times: split it (t split), reword it, or drop it (t del)?" DarkGray }
             }
             elseif (-not $OneTaskOpening) { & $say 'Nothing to do. Add one: t <task>' DarkGray }
             if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
@@ -361,6 +388,7 @@ function t {
         'skip' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             if ($tasks.Count -eq 1) { & $say 'Only one task on your list.' DarkGray; return }
+            $bump = & $titleOf $tasks[0]
             $tasks = @($tasks | Select-Object -Skip 1) + $tasks[0]
         }
         'now' {
@@ -390,7 +418,9 @@ function t {
             if (-not "$text".Trim()) { return }
             $old = $tasks[0] -split ' // ', 2
             # The note is kept unless the new text brings its own ("x // new note") or ends with "//" (no note)
+            $renamed = @((& $titleOf $tasks[0]))
             $tasks[0] = if ($text -match ' // ') { $text } elseif ($text -match '\s*//$') { ($text -replace '\s*//$', '').Trim() } elseif ($old.Count -gt 1) { "$text // $($old[1])" } else { $text }
+            $renamed += & $titleOf $tasks[0]
         }
         'split' {
             # PowerShell treats ";" as a statement separator, so steps are separated by " / ".
@@ -419,12 +449,15 @@ function t {
         'list' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             $first = @{}
+            $ages = & $readAge
             for ($i = 0; $i -lt $tasks.Count; $i++) {
                 $parts = $tasks[$i] -split ' // ', 2
                 $title = $parts[0].Trim()
+                # After the task, dimmed: its note, and its age once it is three days old
+                $dim = $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) + $(if ($ages[$title] -and ($x = & $ageOf $ages[$title].Day)) { "  $x" } else { '' })
                 & $say "$($i + 1). $($parts[0])" $(if ($i) { 'Gray' } else { 'Cyan' }) -NoNewline
-                if ($first.ContainsKey($title)) { & $say $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) DarkGray -NoNewline; & $say "  (same as #$($first[$title]))" Yellow }
-                else { $first[$title] = $i + 1; & $say $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) DarkGray }
+                if ($first.ContainsKey($title)) { & $say $dim DarkGray -NoNewline; & $say "  (same as #$($first[$title]))" Yellow }
+                else { $first[$title] = $i + 1; & $say $dim DarkGray }
             }
             if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
             return
@@ -659,6 +692,25 @@ function t {
     if ($doneMsg) { & $say "$doneMsg  (t undo to revert)" Green }
     foreach ($p in $allDone) { & $say "${p}: all steps done." Green }
     t
+    # After a done, at most once a day: point at the task that has waited longest (three weeks or more).
+    # t suggests; it never reorders the list itself.
+    if ($cmd -eq 'done') {
+        $ages = & $readAge
+        if ($ages["`t"] -ne $day) {
+            $limit = $now.Date.AddDays(-21).ToString('yyyy-MM-dd')
+            $old = $null
+            for ($i = 1; $i -lt $tasks.Count; $i++) {
+                $e = $ages[(& $titleOf $tasks[$i])]
+                if ($e -and $e.Day -le $limit -and (-not $old -or $e.Day -lt $old.Day)) { $old = @{ Day = $e.Day; Index = $i } }
+            }
+            if ($old) {
+                $weeks = [int][Math]::Floor(($now.Date - [datetime]::ParseExact($old.Day, 'yyyy-MM-dd', $null)).Days / 7)
+                & $say "waiting $weeks weeks: $(& $titleOf $tasks[$old.Index])  (t now $($old.Index + 1))" DarkGray
+                $ages["`t"] = $day
+                & $writeAge $ages
+            }
+        }
+    }
 }
 
 # Bare t shows the one task whenever a terminal opens; an empty list stays silent there

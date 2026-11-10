@@ -186,6 +186,28 @@ try {
     Reset -Routine 'weekdays 14:00 quiet timesheet', 'weekdays 14:00 loud one' -Now '2026-11-09 14:30'
     Run | Out-Null
     Is 'quiet on top' (File todo.txt)                        'timesheet|loud one'
+
+    # --- step 6: ages and nudges ---
+    Reset 'a', 'b'
+    1..6 | ForEach-Object { Run skip | Out-Null }          # a is skipped three times and back on top
+    Is 'skip nudge'     (Run)             "$arrow a|skipped 3 times: split it (t split), reword it, or drop it (t del)?"
+    Run reword a better | Out-Null
+    Is 'reword resets'  (Run)             "$arrow a better"
+    Reset 'old one'
+    Run new one | Out-Null
+    Is 'no age yet'     (Run list)        '1. old one||2. new one|'
+    At '2026-11-14 09:00'
+    Is 'age days'       (Run list)        '1. old one|  5d|2. new one|  5d'
+    At '2026-12-07 09:00'
+    Run fresh // note | Out-Null
+    Is 'age weeks'      (Run list)        '1. old one|  4w|2. new one|  4w|3. fresh|  // note'
+    Reset 'a', 'b', 'c'
+    Run d | Out-Null
+    At '2026-12-07 09:00'
+    Is 'waiting hint'   (Run done)        "$arrow b|waiting 4 weeks: c  (t now 2)"
+    Is 'hint once'      (Run done)        "$arrow c"
+    Run undo | Out-Null
+    Is 'age survives'   (Run list)        '1. b|  4w|2. c|  4w|3. d|  4w'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

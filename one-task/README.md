@@ -9,7 +9,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
   - `todo.txt`: one task per line, line 1 is the current task. Any text editor works, on the PC or your phone; blank lines are ignored.
   - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Nothing reads it back.
   - `routine.txt`: your daily routine (see below).
-  - `routine.last` and `todo.undo`: the tool's own records (the current routine day, and the state before your last change); leave them alone.
+  - `routine.last`, `todo.undo` and `todo.age`: the tool's own records (the current routine day, the state before your last change, and when each task was first seen); leave them alone.
 - Sync between PCs is the sync app's job; the tool has no sync code, network calls or accounts.
 
 ## Requirements
@@ -103,6 +103,14 @@ parks `report: draft`, `report: review` and `report: send`. `t now` and `t add` 
 
 The name and its `:` are needed: `t call mom / dad` stays one task.
 
+## Hints
+
+`t` keeps the order you give the list and never reorders it, but it points things out in one dim line:
+
+- `t list` shows how long a task has been on the list once it is three days old (`5d`, `3w`).
+- When the current task has been skipped three times: `skipped 3 times: split it (t split), reword it, or drop it (t del)?`
+- After a `t done`, at most once a day, the task that has waited longest, if that is three weeks or more: `waiting 5 weeks: renew passport  (t now 7)`.
+
 ## Daily routine
 
 `routine.txt` holds tasks you do regularly, one per line. Manage it with `t routine <line>`, `t routine list` and `t routine del`; adding skips a task already in the routine. `t routine edit` is there for anything else. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
@@ -175,6 +183,7 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 ## Known limitations
 
 - **Tidying:** `t` trims tasks and collapses runs of spaces when it next changes `todo.txt` or `routine.txt`; comments in `routine.txt` are kept. `t list` marks a task that repeats an earlier one with `(same as #n)`.
+- **Ages are per PC and per wording:** a task's age starts when `t` on this PC first changes the list with the task on it, and starts again if you reword it in an editor (`t reword` keeps it).
 - **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
 - **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, a word such as `14:00` or `2pm` as a time, and `quiet` after a time as the quiet mark. A routine task that should start with such a word cannot.
 - **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.

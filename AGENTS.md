@@ -21,7 +21,7 @@ Guidance for AI coding agents working in this repo. Utility-specific rules live 
 
 ## Testing
 
-- Verify on a real Windows machine; this repo has no automated tests. Say what was and wasn't verified.
+- Verify on a real Windows machine. The repo has no automated tests, except where a utility ships its own test script (run it). Say what was and wasn't verified.
 - Do not leave test installs behind: uninstall, or restore the previous state.
 
 ## Versioning

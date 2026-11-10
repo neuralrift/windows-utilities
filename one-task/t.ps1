@@ -1,6 +1,6 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t skip | t now <task|n>
-#        t note <text> | t reword <text> | t split [<a> / <b>] | t list | t undo | t edit | t merge | t help
+#        t note <text> | t reword <text> | t split [<a> / <b>] | t list | t log [name] | t undo | t edit | t merge | t help
 #        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
 #        t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
@@ -331,6 +331,7 @@ function t {
                 '  t split <a> / <b> ...    replace the current task with its steps'
                 '  t add                    type tasks one per line, any characters'
                 '  t undo                   take back the last change'
+                '  t log [name]             what you finished; how well a routine is kept'
                 'Routine'
                 '  t routine                the routine, numbered, with when each runs'
                 '  t routine <line>         add: [days] [time] [quiet] task, e.g. weekdays 14:00 timesheet'
@@ -342,6 +343,75 @@ function t {
                 '  t setup | t uninstall    install or remove'
             ) | ForEach-Object { if ($_.StartsWith(' ')) { & $say $_ } else { & $say $_ Cyan } }
             & $say "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." DarkGray
+            return
+        }
+        'log' {
+            # The one place done.txt is read back: reports only, nothing acts on it.
+            # t log: this week, and how each routine entry was kept. t log <name>: one routine entry, or the
+            # tasks called "<name>" or "<name>: ...".
+            $hist = @(foreach ($l in @(if (Test-Path $DONE) { [IO.File]::ReadAllLines($DONE) })) {
+                if ($l -match '^(\d{4}-\d{2}-\d{2}) (missed: |dropped: )?(.+)$') {
+                    $d = $Matches[1]; $k = if ($Matches[2]) { $Matches[2].Substring(0, $Matches[2].Length - 2) } else { 'done' }; $x = $Matches[3]
+                    [pscustomobject]@{ Day = $d; Kind = $k; Title = & $titleOf $x }
+                }
+            })
+            $since  = $now.Date.AddDays(-27).ToString('yyyy-MM-dd')
+            $monday = $now.Date.AddDays(-(([int]$now.DayOfWeek + 6) % 7)).ToString('yyyy-MM-dd')
+            # The days in the last 4 weeks on which <name> was logged: kept when it was done and nothing of it missed.
+            # Done plus missed days are the days it was due, so earlier schedules need not be known.
+            $daysOf = {
+                param($name)
+                $mine = @($hist | Where-Object { $_.Kind -ne 'dropped' -and $_.Day -ge $since -and (& $isOf $_.Title @($name)) })
+                @($mine | Group-Object Day | Sort-Object Name | ForEach-Object { [pscustomobject]@{ Day = $_.Name; Kept = -not @($_.Group | Where-Object { $_.Kind -eq 'missed' }).Count } })
+            }
+            $statOf = {
+                param($days)
+                $kept = @($days | Where-Object { $_.Kept }).Count
+                $streak = 0
+                for ($i = $days.Count - 1; $i -ge 0 -and $days[$i].Kept; $i--) { $streak++ }
+                $pct = if ($days.Count) { [int][Math]::Round(100 * $kept / $days.Count) } else { 0 }
+                [pscustomobject]@{ Total = $days.Count; Kept = $kept; Pct = $pct; Streak = $streak; Color = $(if ($pct -ge 80) { 'Green' } elseif ($pct -ge 50) { 'Yellow' } else { 'Red' }) }
+            }
+            if ($rest.Count) {
+                $name  = $rest -join ' '
+                $mine  = @($hist | Where-Object { & $isOf $_.Title @($name) })
+                $entry = @($items | Where-Object { $_.Key -eq $name })[0]
+                if (-not $mine.Count -and -not $entry) {
+                    # "log" also starts real tasks ("log hours"): with no history for the text, it is one
+                    if ((& $findDupe "log $name") -ge 0) { & $say 'already on your list.' DarkGray; return }
+                    $tasks += "log $name"
+                    if (& $commit 'park') { & $say "parked. (no history for '$name')" DarkGray }
+                    return
+                }
+                if ($entry -or @($mine | Where-Object { $_.Kind -eq 'missed' }).Count) {
+                    & $say $(if ($entry) { "$($entry.Key)  $(& $whenOf $entry)" } else { $name })
+                    $days = @(& $daysOf $name)
+                    if (-not $days.Count) { & $say 'nothing logged in the last 4 weeks.' DarkGray; return }
+                    $st = & $statOf $days
+                    & $say "last 4 weeks: $($st.Kept) of $($st.Total) days ($($st.Pct)%), streak $($st.Streak)" $st.Color
+                    # The last 20 days it was due, oldest first, in fives: x kept, . missed
+                    $marks = @($days | Select-Object -Last 20 | ForEach-Object { if ($_.Kept) { 'x' } else { '.' } })
+                    & $say (@(for ($i = 0; $i -lt $marks.Count; $i += 5) { $marks[$i..([Math]::Min($i + 4, $marks.Count - 1))] -join ' ' }) -join '  ') DarkGray
+                } else {
+                    $done = @($mine | Where-Object { $_.Kind -eq 'done' })
+                    $drop = @($mine | Where-Object { $_.Kind -eq 'dropped' }).Count
+                    $week = @($done | Where-Object { $_.Day -ge $monday }).Count
+                    & $say ("${name}: $($done.Count) done ($week this week)" + $(if ($done.Count) { ", last on $($done[-1].Day)" } else { '' }) + $(if ($drop) { ", $drop dropped" } else { '' }))
+                }
+                return
+            }
+            $wk = @($hist | Where-Object { $_.Day -ge $monday })
+            & $say "this week: $(@($wk | Where-Object { $_.Kind -eq 'done' }).Count) done, $(@($wk | Where-Object { $_.Kind -eq 'dropped' }).Count) dropped, $(@($wk | Where-Object { $_.Kind -eq 'missed' }).Count) missed"
+            $keys = @($items | ForEach-Object { $_.Key } | Select-Object -Unique)
+            if ($keys.Count) {
+                & $say 'routine, last 4 weeks:'
+                $pad = ($keys | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum
+                foreach ($k in $keys) {
+                    $st = & $statOf @(& $daysOf $k)
+                    if ($st.Total) { & $say "  $($k.PadRight($pad))  $($st.Kept) of $($st.Total) days  $($st.Pct)%  streak $($st.Streak)" $st.Color }
+                    else { & $say "  $($k.PadRight($pad))  nothing logged yet" DarkGray }
+                }
+            }
             return
         }
         'undo' {

@@ -208,6 +208,21 @@ try {
     Is 'hint once'      (Run done)        "$arrow c"
     Run undo | Out-Null
     Is 'age survives'   (Run list)        '1. b|  4w|2. c|  4w|3. d|  4w'
+
+    # --- step 7: log ---
+    Reset
+    [IO.File]::WriteAllLines("$dir\done.txt", [string[]]('2026-11-02 gym', '2026-11-03 missed: gym', '2026-11-04 gym // legs', '2026-11-05 gym', '2026-11-06 blog: post one', '2026-10-01 gym', '2026-11-09 dropped: blog: idea'))
+    Is 'log name'      (Run log gym)     'gym|last 4 weeks: 3 of 4 days (75%), streak 2|x . x x'
+    Is 'log prefix'    (Run log blog)    'blog: 1 done (0 this week), last on 2026-11-06, 1 dropped'
+    Is 'log unknown'   (Run log hours)   "parked. (no history for 'hours')"
+    Is 'log parked'    (File todo.txt)   'log hours'
+    Is 'log week'      (Run log)         'this week: 0 done, 1 dropped, 0 missed'
+    Reset -Routine 'weekdays 14:00 timesheet', 'weekdays 07:00 morning: stretch / shower', 'weekends gym'
+    [IO.File]::WriteAllLines("$dir\done.txt", [string[]]('2026-11-05 timesheet', '2026-11-06 missed: timesheet', '2026-11-06 morning: stretch', '2026-11-06 missed: morning: shower', '2026-11-05 morning: stretch', '2026-11-05 morning: shower'))
+    Is 'log routine'   (Run log timesheet)   'timesheet  weekdays at 14:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
+    Is 'log steps'     (Run log morning)     'morning  weekdays at 07:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
+    Is 'log empty'     (Run log gym)         'gym  weekends, in the morning|nothing logged in the last 4 weeks.'
+    Is 'log overview'  (Run log)             'this week: 0 done, 0 dropped, 0 missed|routine, last 4 weeks:|  timesheet  1 of 2 days  50%  streak 0|  morning    1 of 2 days  50%  streak 0|  gym        nothing logged yet'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

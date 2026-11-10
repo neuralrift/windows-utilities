@@ -7,7 +7,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 - The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task. With nothing to do, a new terminal prints nothing; typing `t` still says so.
 - Tasks live in the task folder chosen at setup, by default `Apps\one-task\` in your OneDrive, Google Drive, Dropbox or iCloud Drive folder:
   - `todo.txt`: one task per line, line 1 is the current task. Any text editor works, on the PC or your phone; blank lines are ignored.
-  - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Nothing reads it back.
+  - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Only `t log` reads it back.
   - `routine.txt`: your daily routine (see below).
   - `routine.last`, `todo.undo` and `todo.age`: the tool's own records (the current routine day, the state before your last change, and when each task was first seen); leave them alone.
 - Sync between PCs is the sync app's job; the tool has no sync code, network calls or accounts.
@@ -56,6 +56,8 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t done 3`, `t done <text>` | Logs that task (number from `t list`, or the one task containing the text) and says which; if several match the text, prints them with their numbers |
 | `t done 2 4` | Logs several tasks, after confirmation |
 | `t undo` | Takes back the last change to your tasks, including what it logged |
+| `t log` | This week's totals, and how well each routine was kept (see Log) |
+| `t log <name>` | One routine, or the tasks called `<name>` or `<name>: ...` |
 | `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
 | `t skip` | Moves the current task to the bottom |
 | `t now <text>` | Puts a task at the top (for interruptions); if it is already on the list, moves it to the top |
@@ -102,6 +104,27 @@ t report: draft / review / send
 parks `report: draft`, `report: review` and `report: send`. `t now` and `t add` take the same form, and `t split draft / review / send` turns the current task into steps. Each step is an ordinary task, done on its own. While several steps of the same name are left, `t` shows `(3 steps left)` next to the current one, and says `report: all steps done.` after the last.
 
 The name and its `:` are needed: `t call mom / dad` stays one task.
+
+## Log
+
+`t log` reads `done.txt` and reports; it changes nothing.
+
+```
+this week: 12 done, 1 dropped, 3 missed
+routine, last 4 weeks:
+  timesheet  16 of 20 days  80%  streak 3
+  morning     9 of 20 days  45%  streak 0
+```
+
+`t log timesheet` shows one routine: the days it was kept out of the days it was due, the current streak, and a row of marks for the last 20 of those days (`x` kept, `.` missed), oldest first. A routine with steps counts as kept on a day only when no step was missed. The figures are green from 80%, yellow from 50% and red below.
+
+For a name that is not a routine, `t log blog` counts the finished tasks called `blog` or `blog: ...`:
+
+```
+blog: 3 done (1 this week), last on 2026-11-06
+```
+
+If nothing was ever logged under the name, `t log <text>` parks `log <text>` as a task and says so, because "log" also starts real tasks (`t log hours`).
 
 ## Hints
 
@@ -184,7 +207,8 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 
 - **Tidying:** `t` trims tasks and collapses runs of spaces when it next changes `todo.txt` or `routine.txt`; comments in `routine.txt` are kept. `t list` marks a task that repeats an earlier one with `(same as #n)`.
 - **Ages are per PC and per wording:** a task's age starts when `t` on this PC first changes the list with the task on it, and starts again if you reword it in an editor (`t reword` keeps it).
-- **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
+- **The log matches by name:** rewording a routine or a task name starts a new history. Days the PC was off count as missed (up to 31), so a holiday lowers the figures.
+- **Reserved first words:** a task cannot start with `done`, `del`, `now`, `note`, `reword`, `split` or `routine`, nor with `log` followed by a name that has history, nor be exactly `list`, `edit`, `log`, `skip`, `add`, `undo`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
 - **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, a word such as `14:00` or `2pm` as a time, and `quiet` after a time as the quiet mark. A routine task that should start with such a word cannot.
 - **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
 - **Routine edits from another device:** the reminder schedule updates at the next `t` on this PC, or at the next reminder, logon or wake. Until then a new timed task can fire late.

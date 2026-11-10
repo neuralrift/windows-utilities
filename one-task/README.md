@@ -6,7 +6,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 
 - The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task. With nothing to do, a new terminal prints nothing; typing `t` still says so.
 - Tasks live in the task folder chosen at setup, by default `Apps\one-task\` in your OneDrive, Google Drive, Dropbox or iCloud Drive folder:
-  - `todo.txt`: one task per line, line 1 is the current task. Edit it in Notepad or on your phone; blank lines are ignored.
+  - `todo.txt`: one task per line, line 1 is the current task. Any text editor works, on the PC or your phone; blank lines are ignored.
   - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Nothing reads it back.
   - `routine.txt`: your daily routine (see below). `routine.last` is the tool's own record of the current routine day; leave it alone.
 - Sync between PCs is the sync app's job; the tool has no sync code, network calls or accounts.
@@ -60,8 +60,12 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t note <text>` | Adds a note to the current task (`t note` alone asks for it) |
 | `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b`; a note stays with the first step |
 | `t list` | Shows all tasks, numbered |
-| `t edit` | Opens `todo.txt` in Notepad |
-| `t routine` | Opens `routine.txt` in Notepad |
+| `t routine <line>` | Adds a line to your routine, e.g. `t routine weekdays 14:00 timesheet`, and says when it runs |
+| `t routine add` | Asks for routine lines one per line until an empty line; takes any characters |
+| `t routine`, `t routine list` | Shows your routine, numbered, with when each task runs |
+| `t routine del 2`, `t routine del <text>` | Removes routine lines after confirmation |
+| `t edit` | Opens `todo.txt` in your editor (see below) |
+| `t edit routine` | Opens `routine.txt` in your editor |
 | `t merge` | Merges conflict copies left by your sync app, after confirmation (see below) |
 | `t setup` | See Setup |
 | `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
@@ -69,7 +73,9 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 
 `t remind` is run by the reminder task; you don't need it.
 
-`list`, `edit`, `routine`, `remind`, `merge`, `skip`, `add`, `help`, `setup` and `uninstall` only act when typed alone, so `t list groceries` and `t help Sam move` park a task.
+`list`, `edit`, `remind`, `merge`, `skip`, `add`, `help`, `setup` and `uninstall` only act when typed alone (`edit` also takes `routine`), so `t list groceries` and `t help Sam move` park a task. Everything after `t routine` is a routine line, unless it starts with `list`, `add` or `del`.
+
+`t edit` uses a terminal editor when it finds one: `$env:VISUAL` or `$env:EDITOR` if set, otherwise the first of `nvim`, `vim`, `nano` and `edit` (Microsoft Edit) on your PATH, and Notepad as the fallback. With a terminal editor, `t` shows your current task when you close it.
 
 ## Notes
 
@@ -83,7 +89,7 @@ call bank // ask about the late fee
 
 ## Daily routine
 
-`routine.txt` holds tasks you do regularly, one per line. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
+`routine.txt` holds tasks you do regularly, one per line. Manage it with `t routine <line>`, `t routine list` and `t routine del`; adding skips a task already in the routine. `t edit routine` is there for anything else. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
 
 | Line | Added |
 |---|---|
@@ -97,6 +103,8 @@ call bank // ask about the late fee
 - A timed task goes to the top at its time, with a Windows notification (see Reminders). If no reminder ran, it goes to the top on the first `t` after its time.
 - Each day starts fresh: routine tasks from the previous day that are still in `todo.txt` are removed and logged as `YYYY-MM-DD missed: task` in `done.txt`. So are timed tasks whose time never came up in a terminal, and every routine task of days on which `t` never ran (up to the last 31 days).
 - A routine task already in `todo.txt` is not added twice.
+- A routine task added during the day starts as if it had always been there: a timed one whose time has passed shows up at the next `t`; an untimed one starts with the next day it applies to.
+- Day lists may be written `mon,thu` or `mon, thu`.
 
 ## Reminders
 
@@ -126,7 +134,7 @@ If two PCs change the same file before it syncs, the sync app keeps both and sav
 - a `todo` copy: its tasks that are not already in `todo.txt` go to the bottom. It skips tasks logged in `done.txt` from a week before the copy onwards, so finished tasks don't come back, and routine tasks, which the routine adds itself.
 - a `done` copy: its lines that are not already in `done.txt` are appended.
 - a `routine.last` copy: deleted; it is the tool's own state.
-- a `routine.txt` copy: not merged. Compare it with `t routine` and delete it yourself.
+- a `routine.txt` copy: not merged. Compare it with `t routine list` and delete it yourself.
 
 Merged copies are deleted; most sync apps keep them in their recycle bin.
 

@@ -15,6 +15,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 5. **Sync is the file system.** Data lives in the task folder chosen at setup (by default `Apps\one-task\` in a OneDrive, Google Drive, Dropbox or iCloud Drive folder), never in this repo. No sync code, network calls, accounts or servers.
 6. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t` with `$OneTaskOpening` set, so an empty list prints nothing there; a typed `t` still prints "Nothing to do".
 7. **Confirm before guessing.** `t done <n>` and `t done <text>` show what they will log and ask first; bare `t done` does not.
+8. **Command line first.** Every common change to `todo.txt` and `routine.txt` should be possible through `t`, so the user never has to edit the files by hand. `t edit` and `t edit routine` are fallbacks, not the way to do things; when a change can only be made in an editor, that is a gap to close.
 
 ## Design (keep intact)
 
@@ -23,11 +24,15 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 - `setup` writes one line ending in `# one-task` to the all-hosts `profile.ps1` of each installed edition (Documents via `GetFolderPath('MyDocuments')`). The line carries `-Folder`, the task folder used as is, and is guarded by `Test-Path` because profiles may sync between PCs.
 - `setup` changes the CurrentUser execution policy only when it would block the profile, and saves the old value and edition in `HKCU\Software\OneTask`. `uninstall` restores it only if it is still `RemoteSigned`.
 - `uninstall` removes the marked lines and the registry key, and keeps the task data.
-- Commands that take no text (`list`, `edit`, `routine`, `remind`, `merge`, `skip`, `add`, `help`, `setup`, `uninstall`) only match when typed alone.
+- Commands that take no text (`list`, `edit`, `remind`, `merge`, `skip`, `add`, `help`, `setup`, `uninstall`) only match when typed alone; `edit` also accepts exactly `routine` or `routines`.
+- `t routine` mirrors `t`: alone or with `list` it lists, `add` alone prompts, `del` removes, and any other text is a routine line to add. `done`/`del`/`top` and `routine del` share `$select`, which takes the list to pick from.
+- `t edit` picks `$VISUAL`/`$EDITOR` (run through `cmd /c` so an editor command with arguments works), then `nvim`, `vim`, `nano`, `edit`, then Notepad. After a terminal editor closes it calls `t`, which shows the task and re-arms reminders if the routine changed; Notepad does not wait, so it returns at once.
 - New command words must rarely start a real task, or capture breaks: `top` and `del` were chosen over `do`, `pick`, `delete` and `drop` for that reason.
 - A task line is `title // note`. Duplicates (on park, `now` and `add`) compare titles case-insensitively; text matching for `done`/`del`/`top` searches the whole line. `done`, `del` and `top` share one selection rule (numbers, or text with exactly one match).
 - `del` confirms even for the current task and logs `dropped:`; `top` changes nothing but order, so it does not confirm.
 - `t add` reads with `Read-Host`, the only way to take `'` and other PowerShell syntax as typed.
+- `t routine add` uses the same `$parseLine` as the routine itself, so what it reports is what will run. It skips a task text already in the routine and writes only when it adds something (writing changes `Stamp`, which re-arms reminders).
+- PowerShell turns `a, b` and `mon,thu` into array arguments; `$a` joins them back with `, `, and `$parseLine` accepts `mon, thu`. `t routine list <words>` is treated as a routine line, so a task may start with "list".
 - `split` separates steps with ` / `, because `;` is a PowerShell statement separator.
 - Routine: `routine.txt` is user-edited plain text (`[days] [HH:MM] task`, `#` comments). `routine.last` is the tool's state: line 1 is the last routine day, then the routine tasks added on it. Routine work runs at the start of every `t` call, so it must stay plain file IO, and it writes only when something changes.
 - Routine tasks are identified by their text; on a new day, the previous day's added tasks still in `todo.txt` are removed and logged as missed. Backfilled missed days are capped at 31.
@@ -70,7 +75,7 @@ t done report           # -> lists both "write report" steps, logs nothing
 t done 2                # answer y -> logs "write report: b"
 ```
 
-Then check the newer commands: `t help` and `t --help` print the list while `t help Sam move` parks; parking `Write Report` after `write report` says "already on your list"; `t now <existing>` moves it up; `t x // note`, `t note more` and `t list` show notes; `t top 3`, `t top <text>`, `t split` keeping the note on step one; `t del 2` answered `n` then `y` logs `dropped:`; `t add` fed `don't forget; milk & eggs # now` parks it as typed.
+Then check the newer commands: `t help` and `t --help` print the list while `t help Sam move` parks; parking `Write Report` after `write report` says "already on your list"; `t now <existing>` moves it up; `t x // note`, `t note more` and `t list` show notes; `t top 3`, `t top <text>`, `t split` keeping the note on step one; `t del 2` answered `n` then `y` logs `dropped:`; `t add` fed `don't forget; milk & eggs # now` parks it as typed; `t routine weekdays 14:00 timesheet`, `t routine mon,thu 17:00 x`, `t routine sat, sun y` (reported as weekends), `t routine list of chores` (a line, not a list), a duplicate, and `t routine add` fed lines at the prompt; `t routine` and `t routine list` list; `t routine del 9` (no such number), `t routine del <text>` answered `n`, `t routine del 1 2` answered `y`; `t edit routines` with `$env:EDITOR` set to `cmd /c echo` receives the routine path; `t edit slides` parks.
 
 For the routine, write a `routine.txt` with untimed, `weekdays`, `sat,sun HH:MM` and single-word lines, then step `$OneTaskNow` through: a weekday morning, the same day after a timed task (added once only), the next day (yesterday's leftovers logged as missed), a jump over skipped days (each logged), and a weekend day. Check `todo.txt`, `done.txt` and `routine.last` after each step.
 

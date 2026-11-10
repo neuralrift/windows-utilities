@@ -1,6 +1,7 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t top <n|text> | t skip
-#        t now <task> | t note <text> | t split <a> / <b> | t list | t edit | t routine | t merge | t help
+#        t now <task> | t note <text> | t split <a> / <b> | t list | t edit [routine] | t merge | t help
+#        t routine [list] | t routine <line> | t routine add | t routine del <n|text>
 #        t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -15,11 +16,20 @@ $OneTaskDir     = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'App
 $OneTaskMarker  = '# one-task'
 
 function t {
-    $a    = @($args | ForEach-Object { [string]$_ })
+    # PowerShell turns "milk, eggs" or "mon,thu" into an array argument; put the commas back
+    $a    = @($args | ForEach-Object { if ($_ -is [array]) { $_ -join ', ' } else { [string]$_ } })
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
+    # t routine [list|add|del] ...: alone or "list" lists, "del" removes, anything else is a routine line to add
+    if ($cmd -eq 'routine') {
+        $sub = if ($rest.Count) { $rest[0] } else { 'list' }
+        if ($sub -in 'list', 'add', 'del') { $rest = @($rest | Select-Object -Skip 1) } else { $sub = 'add' }
+        $cmd = "routine $sub"
+        if ($sub -eq 'list' -and $rest.Count) { $cmd = 'routine add'; $rest = @('list') + $rest }   # "t routine list x" is a line
+    }
+    if ($cmd -eq 'edit' -and $rest.Count -eq 1 -and $rest[0] -in 'routine', 'routines') { $cmd = 'edit routine'; $rest = @() }
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'merge', 'skip', 'add', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'remind', 'merge', 'skip', 'add', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
     if ($cmd -in '-h', '--help', '?') { $cmd = 'help' }
 
     $dir   = $OneTaskDir
@@ -42,22 +52,25 @@ function t {
         $ROUTINE = Join-Path $dir 'routine.txt'
         $LAST    = Join-Path $dir 'routine.last'   # PowerShell names are case-insensitive: no other $last/$state below
         $due     = @()
-        if (Test-Path $ROUTINE) {
+        # Reads one routine line, "[days] [HH:MM] task"; returns nothing for blank lines and # comments
+        $parseLine = {
+            param($l, $n)
+            $d = 'sun|mon|tue|wed|thu|fri|sat'
+            $w = @(("$l".Trim() -replace "(?<=\b($d))\s*,\s*(?=($d)\b)", ',') -split '\s+')   # "mon, thu" -> "mon,thu"
+            if (-not "$l".Trim() -or $w[0].StartsWith('#')) { return }
             $names = @{ sun = 0; mon = 1; tue = 2; wed = 3; thu = 4; fri = 5; sat = 6 }
-            $n = 0
-            $items = foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) {
-                $n++
-                $w = @($l.Trim() -split '\s+')
-                if (-not $l.Trim() -or $w[0].StartsWith('#')) { continue }
-                $days = 0..6; $at = $null
-                if ($w.Count -gt 1 -and $w[0] -match '^(daily|weekdays|weekends|((sun|mon|tue|wed|thu|fri|sat),?)+)$') {
-                    $days = switch ($w[0]) { 'daily' { 0..6 } 'weekdays' { 1..5 } 'weekends' { 0, 6 } default { @($w[0] -split ',' | Where-Object { $_ } | ForEach-Object { $names[$_] }) } }
-                    $w = @($w | Select-Object -Skip 1)
-                }
-                if ($w.Count -gt 1 -and $w[0] -match '^([01]?\d|2[0-3]):[0-5]\d$') { $at = [timespan]$w[0]; $w = @($w | Select-Object -Skip 1) }
-                [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' '; Line = $n }
+            $days = 0..6; $at = $null
+            if ($w.Count -gt 1 -and $w[0] -match "^(daily|weekdays|weekends|(($d),?)+)$") {
+                $days = switch ($w[0]) { 'daily' { 0..6 } 'weekdays' { 1..5 } 'weekends' { 0, 6 } default { @($w[0] -split ',' | Where-Object { $_ } | ForEach-Object { $names[$_] }) } }
+                $w = @($w | Select-Object -Skip 1)
             }
-            $items = @($items)
+            if ($w.Count -gt 1 -and $w[0] -match '^([01]?\d|2[0-3]):[0-5]\d$') { $at = [timespan]$w[0]; $w = @($w | Select-Object -Skip 1) }
+            [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' '; Line = $n }
+        }
+        $items = @()
+        if (Test-Path $ROUTINE) {
+            $n = 0
+            $items = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; & $parseLine $l $n })
             # @() around if: an if expression unrolls a one-element array into a bare string
             $memo  = @(if (Test-Path $LAST) { [IO.File]::ReadAllLines($LAST) })
             $prevDay = if ($memo.Count) { $memo[0] } else { '' }
@@ -124,19 +137,28 @@ function t {
     # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
     $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
     $findDupe = { param($s) $k = & $titleOf $s; for ($i = 0; $i -lt $tasks.Count; $i++) { if ((& $titleOf $tasks[$i]) -eq $k) { return $i } }; -1 }
-    # Picks tasks by numbers, or by text when exactly one task contains it; says why when it cannot (done, del, top)
+    # Describes when a routine entry runs, e.g. "weekdays at 14:00" or "every day, in the morning"
+    $whenOf = {
+        param($r)
+        $day3 = 'sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'
+        $w = switch ("$($r.Days | Sort-Object)") { '0 1 2 3 4 5 6' { 'every day' } '1 2 3 4 5' { 'weekdays' } '0 6' { 'weekends' } default { ($r.Days | Sort-Object | ForEach-Object { $day3[$_] }) -join ',' } }
+        $w + $(if ($r.At) { " at $($r.At.ToString('hh\:mm'))" } else { ', in the morning' })
+    }
+    # Picks entries of $list by numbers, or by text when exactly one contains it; says why when it cannot
+    # (done, del and top on tasks; routine del on routine lines)
     $select = {
-        param($verb)
+        param($verb, $list = $tasks, $listCmd = 't list')
+        $list = @($list)
         if (@($rest -notmatch '^\d+$').Count -eq 0) {
             $p = @($rest | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
-            if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $tasks.Count }).Count) { Write-Host 'No such task number. See: t list' -ForegroundColor Yellow; return }
+            if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $list.Count }).Count) { Write-Host "No such number. See: $listCmd" -ForegroundColor Yellow; return }
             return , $p
         }
         $text = $rest -join ' '
-        $p = @(0..($tasks.Count - 1) | Where-Object { $tasks[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-        if (-not $p.Count) { Write-Host "No task matches '$text'." -ForegroundColor Yellow; return }
+        $p = @(0..($list.Count - 1) | Where-Object { $list[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        if (-not $p.Count) { Write-Host "Nothing matches '$text'." -ForegroundColor Yellow; return }
         if ($p.Count -gt 1) {
-            $p | ForEach-Object { Write-Host "$($_ + 1). $($tasks[$_])" }
+            $p | ForEach-Object { Write-Host "$($_ + 1). $($list[$_])" }
             Write-Host "Several match. Use: t $verb <number>" -ForegroundColor DarkGray
             return
         }
@@ -167,7 +189,11 @@ function t {
                 't note <text>            add a note to the current task'
                 't split <a> / <b> ...    replace the current task with its steps'
                 't list                   all tasks, numbered'
-                't edit | t routine       open todo.txt or routine.txt in Notepad'
+                't routine <line>         add to the routine: [weekdays|weekends|mon,thu] [HH:MM] task'
+                't routine add            type routine lines, any characters; empty line ends'
+                't routine [list]         the routine, numbered, with when each runs'
+                't routine del <n|text>   remove from the routine'
+                't edit [routine]         open todo.txt (or routine.txt) in your editor'
                 't merge                  merge conflict copies from your sync app'
                 't setup | t uninstall    install or remove'
             ) | ForEach-Object { Write-Host $_ }
@@ -280,10 +306,53 @@ function t {
             $drop | Remove-Item
             $tasks += $newTasks
         }
-        'edit' { notepad $TODO; return }
-        'routine' {
-            if (-not (Test-Path $ROUTINE)) { Write-Host 'No routine.txt yet. Run: t setup' -ForegroundColor Yellow; return }
-            notepad $ROUTINE; return
+        { $_ -in 'edit', 'edit routine' } {
+            # A terminal editor first: $VISUAL/$EDITOR, then nvim, vim, nano, Microsoft Edit; Notepad as the fallback
+            $file = if ($cmd -eq 'edit') { $TODO } else { $ROUTINE }
+            $ed = @($env:VISUAL, $env:EDITOR | Where-Object { $_ })
+            if ($ed.Count) { & $env:ComSpec /c "$($ed[0]) `"$file`"" }   # cmd parses an editor command with its own arguments
+            elseif ($c = Get-Command nvim, vim, nano, edit -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1) { & $c.Source $file }
+            else { notepad $file; return }
+            t   # show the task again, and re-arm reminders if the routine changed
+            return
+        }
+        'routine list' {
+            if (-not $items.Count) { Write-Host 'No routine yet. Add one: t routine <task>' -ForegroundColor DarkGray; return }
+            for ($i = 0; $i -lt $items.Count; $i++) {
+                Write-Host "$($i + 1). $($items[$i].Text)" -NoNewline
+                Write-Host "  $(& $whenOf $items[$i])" -ForegroundColor DarkGray
+            }
+            return
+        }
+        'routine add' {
+            # One line from the command line, or several typed at a prompt (any characters) until an empty line
+            $new = @(if ($rest.Count) { $rest -join ' ' } else { while ($line = "$(Read-Host 'Routine')".Trim()) { $line } })
+            $lines = @(if (Test-Path $ROUTINE) { [IO.File]::ReadAllLines($ROUTINE) })
+            $count = $lines.Count
+            foreach ($l in $new) {
+                $r = & $parseLine $l 0
+                if (-not $r) { continue }
+                if (@($items).Text -contains $r.Text) { Write-Host "  already in your routine: $($r.Text)" -ForegroundColor DarkGray; continue }
+                $lines += ("$l".Trim() -replace '(?<=\b(sun|mon|tue|wed|thu|fri|sat))\s*,\s*(?=(sun|mon|tue|wed|thu|fri|sat)\b)', ',')
+                $items += $r
+                Write-Host "  added to your routine: $($r.Text) ($(& $whenOf $r))" -ForegroundColor DarkGray
+            }
+            if ($lines.Count -gt $count) { [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines) }
+            return
+        }
+        'routine del' {
+            if (-not $rest.Count) { Write-Host 'Usage: t routine del <number|text>  (numbers from t routine list)' -ForegroundColor Yellow; return }
+            if (-not $items.Count) { Write-Host 'Your routine is empty.' -ForegroundColor DarkGray; return }
+            $pick = & $select 'routine del' (@($items).Text) 't routine list'
+            if ($null -eq $pick) { return }
+            $pick | ForEach-Object { Write-Host "  $($items[$_].Text)  $(& $whenOf $items[$_])" }
+            if ((Read-Host 'Remove from your routine? [y/N]') -ne 'y') { return }
+            $gone = @($pick | ForEach-Object { $items[$_].Line })
+            $n = 0
+            $lines = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; if ($n -notin $gone) { $l } })
+            [IO.File]::WriteAllLines($ROUTINE, [string[]]$lines)
+            Write-Host "  removed $($gone.Count) from your routine." -ForegroundColor DarkGray
+            return
         }
         'remind' {
             # Run by the OneTask scheduled task. The routine code above has already put due tasks on top

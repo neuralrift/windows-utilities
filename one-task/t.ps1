@@ -1,6 +1,7 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
-# Usage: t | t <task> | t done [n ...|text] | t skip | t now <task> | t split <a> / <b>
-#        t list | t edit | t routine | t merge | t setup | t uninstall   (t remind is run by the scheduled task)
+# Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t top <n|text> | t skip
+#        t now <task> | t note <text> | t split <a> / <b> | t list | t edit | t routine | t merge | t help
+#        t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Folder,   # the task folder, used as is (what setup writes to the profile line)
@@ -18,7 +19,8 @@ function t {
     $cmd  = if ($a.Count) { $a[0] } else { '' }
     $rest = @($a | Select-Object -Skip 1)
     # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'merge', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'merge', 'skip', 'add', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
+    if ($cmd -in '-h', '--help', '?') { $cmd = 'help' }
 
     $dir   = $OneTaskDir
     $TODO  = Join-Path "$dir\" 'todo.txt'
@@ -119,35 +121,86 @@ function t {
         $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)[-_ (].*\.(txt|last)$' } })
     }
 
+    # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
+    $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
+    $findDupe = { param($s) $k = & $titleOf $s; for ($i = 0; $i -lt $tasks.Count; $i++) { if ((& $titleOf $tasks[$i]) -eq $k) { return $i } }; -1 }
+    # Picks tasks by numbers, or by text when exactly one task contains it; says why when it cannot (done, del, top)
+    $select = {
+        param($verb)
+        if (@($rest -notmatch '^\d+$').Count -eq 0) {
+            $p = @($rest | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
+            if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $tasks.Count }).Count) { Write-Host 'No such task number. See: t list' -ForegroundColor Yellow; return }
+            return , $p
+        }
+        $text = $rest -join ' '
+        $p = @(0..($tasks.Count - 1) | Where-Object { $tasks[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        if (-not $p.Count) { Write-Host "No task matches '$text'." -ForegroundColor Yellow; return }
+        if ($p.Count -gt 1) {
+            $p | ForEach-Object { Write-Host "$($_ + 1). $($tasks[$_])" }
+            Write-Host "Several match. Use: t $verb <number>" -ForegroundColor DarkGray
+            return
+        }
+        , $p
+    }
+
     switch ($cmd) {
         '' {
-            if ($tasks.Count) { Write-Host "$([char]0x25B6) $($tasks[0])" -ForegroundColor Cyan }
+            if ($tasks.Count) {
+                $parts = $tasks[0] -split ' // ', 2
+                Write-Host "$([char]0x25B6) $($parts[0])" -ForegroundColor Cyan
+                if ($parts.Count -gt 1) { Write-Host "  $($parts[1])" -ForegroundColor DarkGray }
+            }
             elseif (-not $OneTaskOpening) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
             if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
+            return
+        }
+        'help' {
+            @(
+                't                        show the current task'
+                't <task> [// note]       park a task at the bottom, optionally with a note'
+                't add                    type tasks one per line, any characters; empty line ends'
+                't now <task>             put a task at the top'
+                't done [n ...|text]      log the current task, or the chosen ones, as done'
+                't del [n ...|text]       remove the current task, or the chosen ones (logged as dropped)'
+                't top <n|text>           make a task the current one'
+                't skip                   move the current task to the bottom'
+                't note <text>            add a note to the current task'
+                't split <a> / <b> ...    replace the current task with its steps'
+                't list                   all tasks, numbered'
+                't edit | t routine       open todo.txt or routine.txt in Notepad'
+                't merge                  merge conflict copies from your sync app'
+                't setup | t uninstall    install or remove'
+            ) | ForEach-Object { Write-Host $_ }
+            Write-Host "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." -ForegroundColor DarkGray
             return
         }
         'done' {
             if (-not $tasks.Count) { return }
             $pick = @(0)
             if ($rest.Count) {
-                if (@($rest -notmatch '^\d+$').Count -eq 0) {
-                    $pick = @($rest | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
-                    if (@($pick | Where-Object { $_ -lt 0 -or $_ -ge $tasks.Count }).Count) { Write-Host 'No such task number. See: t list' -ForegroundColor Yellow; return }
-                } else {
-                    $text = $rest -join ' '
-                    $pick = @(0..($tasks.Count - 1) | Where-Object { $tasks[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-                    if (-not $pick.Count) { Write-Host "No task matches '$text'." -ForegroundColor Yellow; return }
-                    if ($pick.Count -gt 1) {
-                        $pick | ForEach-Object { Write-Host "$($_ + 1). $($tasks[$_])" }
-                        Write-Host 'Several match. Use: t done <number>' -ForegroundColor DarkGray
-                        return
-                    }
-                }
+                $pick = & $select 'done'
+                if ($null -eq $pick) { return }
                 $pick | ForEach-Object { Write-Host "  $($tasks[$_])" }
                 if ((Read-Host 'Mark done? [y/N]') -ne 'y') { return }
             }
             $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day $($tasks[$_])`r`n") }
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
+        }
+        'del' {
+            if (-not $tasks.Count) { return }
+            $pick = @(0)
+            if ($rest.Count) { $pick = & $select 'del'; if ($null -eq $pick) { return } }
+            $pick | ForEach-Object { Write-Host "  $($tasks[$_])" }
+            if ((Read-Host 'Delete? [y/N]') -ne 'y') { return }
+            $pick | ForEach-Object { [IO.File]::AppendAllText($DONE, "$day dropped: $($tasks[$_])`r`n") }
+            $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
+        }
+        'top' {
+            if (-not $rest.Count) { Write-Host 'Usage: t top <number|text>' -ForegroundColor Yellow; return }
+            $pick = & $select 'top'
+            if ($null -eq $pick) { return }
+            if (@($pick).Count -gt 1) { Write-Host 'Choose one task.' -ForegroundColor Yellow; return }
+            $tasks = @($tasks[$pick[0]]) + @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -ne $pick[0]) { $tasks[$i] } })
         }
         'skip' {
             if (-not $tasks.Count) { return }
@@ -155,17 +208,44 @@ function t {
         }
         'now' {
             if (-not $rest.Count) { return }
-            $tasks = @($rest -join ' ') + $tasks
+            $new = $rest -join ' '
+            $i = & $findDupe $new
+            if ($i -ge 0) { Write-Host 'Already on your list; moved to the top.' -ForegroundColor DarkGray; $new = $tasks[$i]; $tasks = @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } }) }
+            $tasks = @($new) + $tasks
+        }
+        'note' {
+            if (-not $tasks.Count) { return }
+            $text = if ($rest.Count) { $rest -join ' ' } else { Read-Host 'Note' }
+            if (-not "$text".Trim()) { return }
+            $tasks[0] = if ($tasks[0] -match ' // ') { "$($tasks[0]); $text" } else { "$($tasks[0]) // $text" }
         }
         'split' {
             # PowerShell treats ";" as a statement separator, so steps are separated by " / "
-            $parts = @(($rest -join ' ') -split '\s+/\s+' | Where-Object { $_.Trim() })
-            if (-not $tasks.Count -or $parts.Count -lt 2) { Write-Host 'Usage: t split <step> / <step> ...' -ForegroundColor Yellow; return }
-            $tasks = @($parts | ForEach-Object { "$($tasks[0]): $($_.Trim())" }) + @($tasks | Select-Object -Skip 1)
+            $steps = @(($rest -join ' ') -split '\s+/\s+' | Where-Object { $_.Trim() })
+            if (-not $tasks.Count -or $steps.Count -lt 2) { Write-Host 'Usage: t split <step> / <step> ...' -ForegroundColor Yellow; return }
+            $parts = $tasks[0] -split ' // ', 2   # the note stays with the first step
+            $new = @($steps | ForEach-Object { "$($parts[0]): $($_.Trim())" })
+            if ($parts.Count -gt 1) { $new[0] += " // $($parts[1])" }
+            $tasks = $new + @($tasks | Select-Object -Skip 1)
+        }
+        'add' {
+            # Read-Host takes the line as typed, so ' ; # | & and $ need no quoting
+            while ($line = "$(Read-Host 'Task')".Trim()) {
+                $i = & $findDupe $line
+                if ($i -ge 0) { Write-Host "  already on your list (#$($i + 1))." -ForegroundColor DarkGray; continue }
+                $tasks += $line
+                [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
+                Write-Host '  parked.' -ForegroundColor DarkGray
+            }
+            return
         }
         'list' {
             if (-not $tasks.Count) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray; return }
-            for ($i = 0; $i -lt $tasks.Count; $i++) { Write-Host "$($i + 1). $($tasks[$i])" -ForegroundColor $(if ($i) { 'Gray' } else { 'Cyan' }) }
+            for ($i = 0; $i -lt $tasks.Count; $i++) {
+                $parts = $tasks[$i] -split ' // ', 2
+                Write-Host "$($i + 1). $($parts[0])" -ForegroundColor $(if ($i) { 'Gray' } else { 'Cyan' }) -NoNewline
+                Write-Host $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) -ForegroundColor DarkGray
+            }
             if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
         }
@@ -330,6 +410,8 @@ function t {
             return
         }
         default {
+            $i = & $findDupe ($a -join ' ')
+            if ($i -ge 0) { Write-Host "already on your list (#$($i + 1))." -ForegroundColor DarkGray; return }
             $tasks += ($a -join ' ')
             [IO.File]::WriteAllLines($TODO, [string[]]$tasks)
             Write-Host 'parked.' -ForegroundColor DarkGray

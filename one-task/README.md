@@ -7,7 +7,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 - The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task. With nothing to do, a new terminal prints nothing; typing `t` still says so.
 - Tasks live in the task folder chosen at setup, by default `Apps\one-task\` in your OneDrive, Google Drive, Dropbox or iCloud Drive folder:
   - `todo.txt`: one task per line, line 1 is the current task. Edit it in Notepad or on your phone; blank lines are ignored.
-  - `done.txt`: a log of `YYYY-MM-DD task` lines, and `YYYY-MM-DD missed: task` for routine tasks left undone. Nothing reads it back.
+  - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Nothing reads it back.
   - `routine.txt`: your daily routine (see below). `routine.last` is the tool's own record of the current routine day; leave it alone.
 - Sync between PCs is the sync app's job; the tool has no sync code, network calls or accounts.
 
@@ -47,23 +47,39 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | Command | Does |
 |---|---|
 | `t` | Shows the current task |
-| `t <text>` | Parks a task at the bottom; never asks anything |
+| `t <text>` | Parks a task at the bottom; never asks anything. A task already on the list is not added again |
+| `t <text> // <note>` | Parks a task with a note (see Notes) |
+| `t add` | Asks for tasks one per line until an empty line; takes any characters, including `'` |
 | `t done` | Logs the current task to `done.txt` and shows the next one |
 | `t done 2 4` | Logs tasks 2 and 4 (numbers from `t list`), after confirmation |
 | `t done <text>` | Logs the one task containing the text, after confirmation; if several match, prints them with their numbers |
+| `t del`, `t del 2 4`, `t del <text>` | Removes the current or chosen tasks after confirmation, logging them as `YYYY-MM-DD dropped: task` |
+| `t top 3`, `t top <text>` | Makes that task the current one |
 | `t skip` | Moves the current task to the bottom |
-| `t now <text>` | Puts a task at the top (for interruptions) |
-| `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b` |
+| `t now <text>` | Puts a task at the top (for interruptions); if it is already on the list, moves it to the top |
+| `t note <text>` | Adds a note to the current task (`t note` alone asks for it) |
+| `t split <a> / <b> / <c>` | Replaces the current task with its steps, e.g. `write report: a`, `write report: b`; a note stays with the first step |
 | `t list` | Shows all tasks, numbered |
 | `t edit` | Opens `todo.txt` in Notepad |
 | `t routine` | Opens `routine.txt` in Notepad |
 | `t merge` | Merges conflict copies left by your sync app, after confirmation (see below) |
 | `t setup` | See Setup |
 | `t uninstall` | Removes the profile lines and restores the execution policy; keeps your tasks |
+| `t help` (or `-h`, `--help`, `?`) | Lists the commands |
 
 `t remind` is run by the reminder task; you don't need it.
 
-`list`, `edit`, `routine`, `remind`, `merge`, `skip`, `setup` and `uninstall` only act when typed alone, so `t list groceries` parks a task.
+`list`, `edit`, `routine`, `remind`, `merge`, `skip`, `add`, `help`, `setup` and `uninstall` only act when typed alone, so `t list groceries` and `t help Sam move` park a task.
+
+## Notes
+
+A task can carry a note after ` // ` on the same line, so `todo.txt` stays one task per line:
+
+```
+call bank // ask about the late fee
+```
+
+`t` shows the note dimmed under the current task, and `t list` shows it after the task. Add one with `t call bank // ask about the late fee`, or to the current task with `t note ask about the late fee`; a second note is appended after `; `. Duplicates are judged on the part before ` // `.
 
 ## Daily routine
 
@@ -124,14 +140,14 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 
 ## Known limitations
 
-- **Reserved first words:** a task cannot start with `done`, `now` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `setup` or `uninstall`.
+- **Reserved first words:** a task cannot start with `done`, `del`, `top`, `now`, `note` or `split`, nor be exactly `list`, `edit`, `routine`, `skip`, `add`, `help`, `setup` or `uninstall`. Use `t add` for such a task.
 - **Routine prefixes:** in `routine.txt`, a first word such as `sat` or `weekdays` followed by more text is read as a day prefix, and `HH:MM` as a time. A routine task that should start with such a word cannot.
 - **Routine tasks are matched by text:** editing a routine line, or the task in `todo.txt`, during the day turns that day's copy into a normal task that is not removed or logged as missed.
 - **Routine edits from another device:** the reminder schedule updates at the next `t` on this PC, or at the next reminder, logon or wake. Until then a new timed task can fire late.
 - **Notification source:** notifications show as coming from Windows PowerShell, because the tool registers no app of its own.
 - **Reserved first word:** `remind` cannot be parked as a one-word task.
 - **Two PCs on the same day:** if both start a new routine day before the files sync, `done.txt` can get duplicate `missed:` lines.
-- **PowerShell syntax in tasks:** characters such as `;`, `#`, `|`, `&`, `(` and `$` are interpreted by PowerShell. Quote the task (`t 'pay rent; call bank'`) or use `t edit`.
+- **PowerShell syntax in tasks:** `'`, `;`, `#`, `|`, `&`, `(` and `$` are read by PowerShell before `t` runs; a lone `'` makes it wait for a closing quote (`>>`). Quote the task (`t "don't forget"`) or use `t add`, which takes the line as typed.
 - **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a sync). The confirmation shows the tasks before anything is logged.
 - **Several PCs:** if Documents is synced (OneDrive folder backup does this), the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC. The task folder path must match as well.
 - **Google Drive streaming:** in the default streaming mode files are online-only, so the first `t` after a restart can be slow while they download. Mark the task folder "Available offline" to avoid it.

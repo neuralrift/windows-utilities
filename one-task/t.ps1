@@ -3,13 +3,14 @@
 #        t list | t edit | t routine | t merge | t setup | t uninstall   (t remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$Root,
+    [string]$Folder,   # the task folder, used as is (what setup writes to the profile line)
+    [string]$Root,     # a synced folder; tasks go in its Apps\one-task
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Command
 )
 
 $OneTaskVersion = '1.0.0'
 $OneTaskScript  = $PSCommandPath
-$OneTaskRoot    = if ($Root) { $Root } else { $env:OneDrive }
+$OneTaskDir     = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'Apps\one-task' } elseif ($env:OneDrive) { Join-Path $env:OneDrive 'Apps\one-task' } else { '' }
 $OneTaskMarker  = '# one-task'
 
 function t {
@@ -19,7 +20,7 @@ function t {
     # Commands that take no text only count when typed alone: "t list groceries" is parked
     if ($rest.Count -and $cmd -in 'list', 'edit', 'routine', 'remind', 'merge', 'skip', 'setup', 'uninstall') { $cmd = 'park' }
 
-    $dir   = if ($OneTaskRoot) { Join-Path $OneTaskRoot 'Apps\one-task' } else { '' }
+    $dir   = $OneTaskDir
     $TODO  = Join-Path "$dir\" 'todo.txt'
     $DONE  = Join-Path "$dir\" 'done.txt'
     $docs  = [Environment]::GetFolderPath('MyDocuments')
@@ -29,7 +30,7 @@ function t {
     $day   = $now.ToString('yyyy-MM-dd')
 
     if ($cmd -notin 'setup', 'uninstall') {
-        if (-not $dir) { Write-Host 'No OneDrive folder found. Run: t setup' -ForegroundColor Yellow; return }
+        if (-not $dir) { Write-Host 'No task folder set. Run: t setup' -ForegroundColor Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
         $tasks = @([IO.File]::ReadAllLines($TODO) | Where-Object { $_.Trim() })
 
@@ -105,7 +106,7 @@ function t {
                 if ($next) { $trig += New-ScheduledTaskTrigger -Once -At $next }
                 # Always Windows PowerShell: toasts need WinRT, which PowerShell 7 lacks
                 Register-ScheduledTask OneTask -Force `
-                    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$OneTaskScript`" -Root `"$OneTaskRoot`" remind") `
+                    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$OneTaskScript`" -Folder `"$OneTaskDir`" remind") `
                     -Trigger $trig `
                     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) `
                     -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited) | Out-Null
@@ -113,15 +114,16 @@ function t {
             }
         }
 
-        # OneDrive saves conflicting edits as copies such as todo-<PC>.txt; t and t list mention them, t merge merges them
-        $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)-.+\.(txt|last)$' } })
+        # Sync apps save conflicting edits as copies: todo-<PC>.txt (OneDrive), todo (<PC>'s conflicted copy ...).txt
+        # (Dropbox), todo (1).txt or todo_conf(1).txt (Google Drive), todo 2.txt (iCloud). t and t list mention them, t merge merges them
+        $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)[-_ (].*\.(txt|last)$' } })
     }
 
     switch ($cmd) {
         '' {
             if ($tasks.Count) { Write-Host "$([char]0x25B6) $($tasks[0])" -ForegroundColor Cyan }
             elseif (-not $OneTaskOpening) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray }
-            if ($copies.Count) { Write-Host 'OneDrive saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
+            if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
         }
         'done' {
@@ -164,7 +166,7 @@ function t {
         'list' {
             if (-not $tasks.Count) { Write-Host 'Nothing to do. Add one: t <task>' -ForegroundColor DarkGray; return }
             for ($i = 0; $i -lt $tasks.Count; $i++) { Write-Host "$($i + 1). $($tasks[$i])" -ForegroundColor $(if ($i) { 'Gray' } else { 'Cyan' }) }
-            if ($copies.Count) { Write-Host 'OneDrive saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
+            if ($copies.Count) { Write-Host 'Your sync app saved a conflict copy. Run: t merge' -ForegroundColor Yellow }
             return
         }
         'merge' {
@@ -174,7 +176,7 @@ function t {
             foreach ($c in $copies) {
                 $lines = @([IO.File]::ReadAllLines($c.FullName) | Where-Object { $_.Trim() })
                 switch -Regex ($c.Name) {
-                    '^todo-' {
+                    '^todo' {
                         # Skip tasks finished (or missed) since a week before the copy was written, so they are not
                         # brought back, and routine tasks, which the routine adds itself
                         $since = $c.LastWriteTime.AddDays(-7).ToString('yyyy-MM-dd')
@@ -182,7 +184,7 @@ function t {
                         $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and @($items).Text -notcontains $_ })
                         $drop += $c
                     }
-                    '^done-' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
+                    '^done' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
                     '\.last$' { $drop += $c }   # the tool's own state; the main routine.last wins
                     default { Write-Host "$($c.Name): compare it with routine.txt (t routine), then delete it." -ForegroundColor Yellow }
                 }
@@ -217,23 +219,44 @@ function t {
             return
         }
         'setup' {
-            # A -Root passed on the command line or by the profile line wins; otherwise ask when there are several OneDrives
-            $base = $Root
-            if (-not $base) {
-                $drives = @($env:OneDriveConsumer, $env:OneDriveCommercial, $env:OneDrive | Where-Object { $_ } | Select-Object -Unique)
-                if (-not $drives.Count) { Write-Host 'No OneDrive folder found. Run the script with: setup -Root <folder>' -ForegroundColor Yellow; return }
-                $base = $drives[0]
-                if ($drives.Count -gt 1) {
-                    for ($i = 0; $i -lt $drives.Count; $i++) { Write-Host "$($i + 1). $($drives[$i])" }
-                    $n = Read-Host 'Which OneDrive holds your tasks? [1]'
-                    if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $drives.Count) { $base = $drives[[int]$n - 1] }
+            # -Folder or -Root (from the command line, or from the profile line when run as t setup) wins;
+            # otherwise pick one of the synced folders found on this PC, or any other folder
+            $target = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'Apps\one-task' } else { '' }
+            if (-not $target) {
+                $found = [ordered]@{}
+                $add = { param($name, $path) if ($path -and -not $found.Contains($name) -and @($found.Values) -notcontains $path -and (Test-Path $path)) { $found[$name] = $path } }
+                & $add 'OneDrive (personal)' $env:OneDriveConsumer
+                & $add 'OneDrive (work)' $env:OneDriveCommercial
+                & $add 'OneDrive' $env:OneDrive
+                foreach ($d in Get-PSDrive -PSProvider FileSystem) { & $add "Google Drive ($($d.Name):)" (Join-Path $d.Root 'My Drive') }
+                & $add 'Google Drive' (Join-Path $env:USERPROFILE 'My Drive')
+                & $add 'Google Drive (old app)' (Join-Path $env:USERPROFILE 'Google Drive')
+                foreach ($j in "$env:LOCALAPPDATA\Dropbox\info.json", "$env:APPDATA\Dropbox\info.json") {
+                    try { $info = Get-Content $j -Raw -ErrorAction Stop | ConvertFrom-Json; & $add 'Dropbox' $info.personal.path; & $add 'Dropbox (business)' $info.business.path } catch { }
                 }
+                & $add 'Dropbox' (Join-Path $env:USERPROFILE 'Dropbox')
+                & $add 'iCloud Drive' (Join-Path $env:USERPROFILE 'iCloudDrive')
+
+                $keys = @($found.Keys)
+                for ($i = 0; $i -lt $keys.Count; $i++) { Write-Host "$($i + 1). $($keys[$i])  $($found[$keys[$i]])" }
+                Write-Host "$($keys.Count + 1). Other folder"
+                $n = Read-Host 'Where should your tasks live? [1]'
+                if (-not $n) { $n = '1' }
+                if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $keys.Count) { $target = Join-Path $found[$keys[[int]$n - 1]] 'Apps\one-task' }
+                elseif ($n -eq "$($keys.Count + 1)") { $target = "$(Read-Host 'Folder for your tasks (used as is)')".Trim().Trim('"') }
+                if (-not $target) { Write-Host 'No folder chosen; setup stopped.' -ForegroundColor Yellow; return }
             }
-            $dir = Join-Path $base 'Apps\one-task'
-            New-Item $dir -ItemType Directory -Force | Out-Null
-            foreach ($f in 'todo.txt', 'done.txt') {
-                $old = Join-Path $base $f
-                if ((Test-Path $old) -and -not (Test-Path (Join-Path $dir $f)) -and (Read-Host "Move $old to $dir? [y/N]") -eq 'y') { Move-Item $old $dir }
+            New-Item $target -ItemType Directory -Force | Out-Null
+            $target = (Resolve-Path $target).Path
+            $dir = $target
+
+            # Offer to bring the tasks over from the folder the old profile line used
+            $prev = @(Get-Content $profs -ErrorAction SilentlyContinue | Where-Object { $_.EndsWith($OneTaskMarker) })
+            if ($prev.Count -and $prev[0] -match "-(Folder|Root) '((?:[^']|'')*)'") {
+                $from = $Matches[2].Replace("''", "'")
+                if ($Matches[1] -eq 'Root') { $from = Join-Path $from 'Apps\one-task' }
+                if ($from -ne $target -and (Test-Path (Join-Path $from 'todo.txt')) -and -not (Test-Path (Join-Path $target 'todo.txt')) -and
+                    (Read-Host "Move your tasks from $from? [y/N]") -eq 'y') { Get-ChildItem $from -File | Move-Item -Destination $target }
             }
             $r = Join-Path $dir 'routine.txt'
             if (-not (Test-Path $r)) {
@@ -250,9 +273,9 @@ function t {
             if (-not (Test-Path $key)) { New-Item $key | Out-Null }
             Set-ItemProperty $key Stamp ''
 
-            # Profiles may sync between PCs through OneDrive, so the line is skipped where the script path does not exist
+            # Documents, and so the profiles, may sync between PCs, so the line is skipped where the script path does not exist
             $s = $OneTaskScript.Replace("'", "''")
-            $line = "if (Test-Path '$s') { . '$s' -Root '$($base.Replace("'", "''"))' }  $OneTaskMarker"
+            $line = "if (Test-Path '$s') { . '$s' -Folder '$($target.Replace("'", "''"))' }  $OneTaskMarker"
             $hasPwsh = [bool](Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue)
             foreach ($p in $profs) {
                 if ($p -eq $profs[1] -and -not $hasPwsh -and -not (Test-Path (Split-Path $p))) { continue }

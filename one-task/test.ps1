@@ -52,7 +52,7 @@ try {
     Is 'del yes'      (Run del 2)                "  list groceries|$arrow write report"
     Is 'del logged'   (File done.txt)            '2026-11-09 call bank|2026-11-09 dropped: list groceries'
     Is 'note'         (Run note ask Sam)         "$arrow write report|  ask Sam"
-    Is 'split'        (Run split a / b)          "$arrow write report: a|  ask Sam"
+    Is 'split'        (Run split a / b)          "$arrow write report: a|  (2 steps left)|  ask Sam"
     Is 'split file'   (File todo.txt)            'write report: a // ask Sam|write report: b'
     Is 'help word'    (Run help Sam move)        'parked.'
     Is 'commas'       (Run buy milk, eggs)       'parked.'
@@ -116,7 +116,7 @@ try {
     Is 'reword clears'  (File todo.txt)              'phone the bank'
     Is 'skip one'       (Run skip)                   'Only one task on your list.'
     Answers 'x', 'y', ''
-    Is 'split prompt'   (Run split)                  "$arrow phone the bank: x"
+    Is 'split prompt'   (Run split)                  "$arrow phone the bank: x|  (2 steps left)"
     Is 'split file 2'   (File todo.txt)              'phone the bank: x|phone the bank: y'
     Reset
     Is 'skip empty'     (Run skip)                   'Nothing to do. Add one: t <task>'
@@ -129,6 +129,34 @@ try {
     Answers 'y'
     Is 'routine del'    (Run routine del 1)          '  add tests  every day, in the morning|  removed 1 from your routine.'
     Is 'help'           ((Run help).Split('|')[0])   'Every day'
+
+    # --- step 4: steps ---
+    Reset
+    Is 'inline steps'   (Run report: draft / review / send)   'parked 3 steps.'
+    Is 'steps file'     (File todo.txt)                       'report: draft|report: review|report: send'
+    Is 'steps left'     (Run)                                 "$arrow report: draft|  (3 steps left)"
+    Is 'steps again'    (Run report: draft / review)          'already on your list (#1).'
+    Is 'no parent'      (Run call mom / dad)                  'parked.'
+    Is 'now steps'      (Run now fix: find / patch)           "$arrow fix: find|  (2 steps left)"
+    Run done | Out-Null
+    Is 'last step'      (Run done)                            "fix: all steps done.|$arrow report: draft|  (3 steps left)"
+    Reset
+    Is 'steps + note'   (Run trip: book / pack // by friday)  'parked 2 steps.'
+    Is 'note on first'  (File todo.txt)                       'trip: book // by friday|trip: pack'
+    Reset -Routine 'weekdays 07:00 morning: stretch / shower', 'weekdays plan: review / pick' -Now '2026-11-09 06:00'
+    Is 'routine steps'  (File todo.txt)                       ''
+    Run | Out-Null
+    Is 'untimed steps'  (File todo.txt)                       'plan: review|plan: pick'
+    At '2026-11-09 07:30'; Run | Out-Null
+    Is 'timed steps'    (File todo.txt)                       'morning: stretch|morning: shower|plan: review|plan: pick'
+    Run done | Out-Null
+    At '2026-11-09 08:00'; Run | Out-Null
+    Is 'no re-add'      (File todo.txt)                       'morning: shower|plan: review|plan: pick'
+    At '2026-11-10 06:00'; Run | Out-Null
+    Is 'step missed'    (File done.txt)                       '2026-11-09 morning: stretch|2026-11-09 missed: plan: review|2026-11-09 missed: plan: pick|2026-11-09 missed: morning: shower'
+    Is 'steps fresh'    (File todo.txt)                       'plan: review|plan: pick'
+    Is 'routine shows'  (Run routine)                         '1. morning: stretch / shower|  weekdays at 07:00|2. plan: review / pick|  weekdays, in the morning'
+    Is 'routine key'    (Run routine morning: other / thing)  '  already in your routine: morning'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -50,6 +50,7 @@ Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo
 | `t` | Shows the current task |
 | `t <text>` | Parks a task at the bottom; never asks anything. A task already on the list is not added again |
 | `t <text> // <note>` | Parks a task with a note (see Notes) |
+| `t <name>: <a> / <b> / <c>` | Parks a task as steps (see Steps) |
 | `t add` | Asks for tasks one per line until an empty line; takes any characters, including `'` |
 | `t done` | Logs the current task to `done.txt` and shows the next one |
 | `t done 3`, `t done <text>` | Logs that task (number from `t list`, or the one task containing the text) and says which; if several match the text, prints them with their numbers |
@@ -90,6 +91,18 @@ call bank // ask about the late fee
 
 `t` shows the note dimmed under the current task, and `t list` shows it after the task. Add one with `t call bank // ask about the late fee`, or to the current task with `t note ask about the late fee`; a second note is appended after `; `. Duplicates are judged on the part before ` // `.
 
+## Steps
+
+A bigger task can be a set of steps that share a name:
+
+```
+t report: draft / review / send
+```
+
+parks `report: draft`, `report: review` and `report: send`. `t now` and `t add` take the same form, and `t split draft / review / send` turns the current task into steps. Each step is an ordinary task, done on its own. While several steps of the same name are left, `t` shows `(3 steps left)` next to the current one, and says `report: all steps done.` after the last.
+
+The name and its `:` are needed: `t call mom / dad` stays one task.
+
 ## Daily routine
 
 `routine.txt` holds tasks you do regularly, one per line. Manage it with `t routine <line>`, `t routine list` and `t routine del`; adding skips a task already in the routine. `t routine edit` is there for anything else. Lines starting with `#` are ignored. Each line may start with a day prefix and then a time:
@@ -101,11 +114,13 @@ call bank // ask about the late fee
 | `weekends gym` | Saturday and Sunday, in the morning |
 | `weekdays 14:00 timesheet` | Monday to Friday, at 14:00 |
 | `mon,thu 17:00 call supplier` | Monday and Thursday, at 17:00 |
+| `weekdays 07:00 morning: stretch / shower / plan` | Monday to Friday, at 07:00, as three steps |
 
 - On the first `t` of a day, untimed routine tasks for that day go to the top of `todo.txt`, in file order.
 - A timed task goes to the top at its time, with a Windows notification (see Reminders). If no reminder ran, it goes to the top on the first `t` after its time.
 - Each day starts fresh: routine tasks from the previous day that are still in `todo.txt` are removed and logged as `YYYY-MM-DD missed: task` in `done.txt`. So are timed tasks whose time never came up in a terminal, and every routine task of days on which `t` never ran (up to the last 31 days).
 - A routine task already in `todo.txt` is not added twice.
+- A routine line with steps puts each step on the list; each is done, or logged as missed, on its own, and the reminder names the routine once.
 - A routine task added during the day starts as if it had always been there: a timed one whose time has passed shows up at the next `t`; an untimed one starts with the next day it applies to.
 - Day lists may be written `mon,thu` or `mon, thu`.
 
@@ -158,6 +173,7 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 - **Notification source:** notifications show as coming from Windows PowerShell, because the tool registers no app of its own.
 - **Reserved first word:** `remind` cannot be parked as a one-word task.
 - **Two PCs on the same day:** if both start a new routine day before the files sync, `done.txt` can get duplicate `missed:` lines.
+- **Steps are read from the text:** a task that contains both `name: ` and ` / ` is always parked as steps. To keep such a line as one task, add it with `t edit`.
 - **PowerShell syntax in tasks:** `'`, `;`, `#`, `|`, `&`, `(` and `$` are read by PowerShell before `t` runs; a lone `'` makes it wait for a closing quote (`>>`). Quote the task (`t "don't forget"`) or use `t add`, which takes the line as typed.
 - **Stale numbers:** `t done <n>` uses the current file, which may have changed since `t list` (another terminal, or a sync). It says which task it logged; `t undo` takes a wrong one back.
 - **Undo is one step,** for the task list and `done.txt` only. It does not undo routine changes or bring back merged conflict copies. If the list changed in between (a sync, a new routine day), it asks first and leaves `done.txt` alone.

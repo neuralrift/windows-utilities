@@ -47,6 +47,17 @@ function t {
     # Yellow needs attention, Red missed or error. NO_COLOR (any value) turns colour off.
     # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
     $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
+    # "parent: a / b // note" -> "parent: a // note", "parent: b"; anything without both "parent: " and " / " -> itself.
+    # Call it as @(& $expand $text).
+    $expand = {
+        param($s)
+        $p = "$s" -split ' // ', 2
+        if ($p[0] -notmatch '^(?<parent>[^:/]+): (?<steps>.+\s/\s.+)$') { return "$s" }
+        $parent = $Matches.parent.Trim()
+        $out = @($Matches.steps -split '\s+/\s+' | Where-Object { $_.Trim() } | ForEach-Object { "${parent}: $($_.Trim())" })
+        if ($p.Count -gt 1) { $out[0] += " // $($p[1])" }
+        $out
+    }
     # A task belongs to a routine entry when its title is the entry, or a step of it ("entry: step")
     $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
@@ -76,7 +87,7 @@ function t {
         # routine.last holds the date of the last routine day, then the tasks added on it.
         $ROUTINE = Join-Path $dir 'routine.txt'
         $LAST    = Join-Path $dir 'routine.last'   # PowerShell names are case-insensitive: no other $last/$state below
-        $due     = @()
+        $due     = @(); $dueShown = @()
         # Reads one routine line, "[days] [HH:MM] task"; returns nothing for blank lines and # comments
         $parseLine = {
             param($l, $n)
@@ -90,7 +101,12 @@ function t {
                 $w = @($w | Select-Object -Skip 1)
             }
             if ($w.Count -gt 1 -and $w[0] -match '^([01]?\d|2[0-3]):[0-5]\d$') { $at = [timespan]$w[0]; $w = @($w | Select-Object -Skip 1) }
-            [pscustomobject]@{ Days = @($days); At = $at; Text = $w -join ' '; Line = $n }
+            # Names are the task lines the entry puts on the list (several when it has steps), Titles the same
+            # without notes, Key the name it is known by (the parent when it has steps)
+            $text  = $w -join ' '
+            $steps = @(& $expand $text)
+            $key   = if ($steps.Count -gt 1) { ($steps[0] -split ': ', 2)[0] } else { & $titleOf $text }
+            [pscustomobject]@{ Days = @($days); At = $at; Text = $text; Names = $steps; Titles = @($steps | ForEach-Object { & $titleOf $_ }); Key = $key; Line = $n }
         }
         $items = @()
         if (Test-Path $ROUTINE) {
@@ -101,27 +117,35 @@ function t {
             $prevDay = if ($memo.Count) { $memo[0] } else { '' }
             $added = @($memo | Select-Object -Skip 1)
             $log   = @()
+            $onList = { param($title) [bool]@($tasks | Where-Object { & $isOf $_ @($title) }).Count }
             $newDay = $prevDay -lt $day
             if ($newDay) {
                 if ($prevDay) {
                     $prev = [datetime]::ParseExact($prevDay, 'yyyy-MM-dd', $null)
-                    foreach ($x in $added) { if (@($tasks | Where-Object { & $isOf $_ @($x) }).Count) { $log += "$prevDay missed: $x" } }
+                    foreach ($x in $added) { if (& $onList $x) { $log += "$prevDay missed: $x" } }
                     $tasks = @($tasks | Where-Object { -not (& $isOf $_ $added) })
-                    foreach ($r in $items) { if ($r.At -and $r.Days -contains [int]$prev.DayOfWeek -and $added -notcontains $r.Text) { $log += "$prevDay missed: $($r.Text)" } }
+                    foreach ($r in $items) { if ($r.At -and $r.Days -contains [int]$prev.DayOfWeek) { foreach ($x in $r.Titles) { if ($added -notcontains $x) { $log += "$prevDay missed: $x" } } } }
                     # Days without any t run (PC off), at most the last 31
                     $from = $prev.AddDays(1)
                     if ($from -lt $now.Date.AddDays(-31)) { $from = $now.Date.AddDays(-31) }
                     for ($x = $from; $x -lt $now.Date; $x = $x.AddDays(1)) {
-                        foreach ($r in $items) { if ($r.Days -contains [int]$x.DayOfWeek) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $($r.Text)" } }
+                        foreach ($r in $items) { if ($r.Days -contains [int]$x.DayOfWeek) { foreach ($y in $r.Titles) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $y" } } }
                     }
                 }
-                $added = @(foreach ($r in $items) { if (-not $r.At -and $r.Days -contains [int]$now.DayOfWeek -and -not @($tasks | Where-Object { & $isOf $_ @($r.Text) }).Count) { $r.Text } })
-                $tasks = $added + $tasks
+                $new = @(foreach ($r in $items) { if (-not $r.At -and $r.Days -contains [int]$now.DayOfWeek) { foreach ($x in $r.Names) { if (-not (& $onList (& $titleOf $x))) { $x } } } })
+                $added = @($new | ForEach-Object { & $titleOf $_ })
+                $tasks = $new + $tasks
             }
-            $due = @($items | Sort-Object At, Line | ForEach-Object { $r = $_; if ($r.At -and $r.At -le $now.TimeOfDay -and $r.Days -contains [int]$now.DayOfWeek -and $added -notcontains $r.Text -and -not @($tasks | Where-Object { & $isOf $_ @($r.Text) }).Count) { $r.Text } })
+            # Timed entries that are due and not yet added today; $dueShown names them for the reminder
+            $due = @(foreach ($r in @($items | Where-Object { $_.At } | Sort-Object At, Line)) {
+                if ($r.At -le $now.TimeOfDay -and $r.Days -contains [int]$now.DayOfWeek) {
+                    $new = @($r.Names | Where-Object { $x = & $titleOf $_; $added -notcontains $x -and -not (& $onList $x) })
+                    if ($new.Count) { $dueShown += $r.Key; $new }
+                }
+            })
             if ($newDay -or $due.Count) {
                 $tasks = $due + $tasks
-                $added += $due
+                $added += @($due | ForEach-Object { & $titleOf $_ })
                 if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
                 & $save $TODO $tasks
                 & $save $LAST (@($day) + $added)
@@ -201,12 +225,15 @@ function t {
         $true
     }
 
-    $logLines = @(); $doneMsg = $null
+    $logLines = @(); $doneMsg = $null; $allDone = @()
     switch ($cmd) {
         '' {
             if ($tasks.Count) {
                 $parts = $tasks[0] -split ' // ', 2
-                & $say "$([char]0x25B6) $($parts[0])" Cyan
+                $parent = if ($parts[0] -match '^([^:]+): ') { $Matches[1] }
+                $left = if ($parent) { @($tasks | Where-Object { & $isOf $_ @($parent) }).Count } else { 0 }
+                if ($left -gt 1) { & $say "$([char]0x25B6) $($parts[0])" Cyan -NoNewline; & $say "  ($left steps left)" DarkGray }
+                else { & $say "$([char]0x25B6) $($parts[0])" Cyan }
                 if ($parts.Count -gt 1) { & $say "  $($parts[1])" DarkGray }
             }
             elseif (-not $OneTaskOpening) { & $say 'Nothing to do. Add one: t <task>' DarkGray }
@@ -218,6 +245,7 @@ function t {
                 'Every day'
                 '  t                        show the current task'
                 '  t <task> [// note]       park a task at the bottom'
+                '  t <name>: <a> / <b>      park a task as steps'
                 '  t done                   finish the current task'
                 '  t skip                   move it to the bottom'
                 '  t now <task|number>      put a task at the top, or move one there'
@@ -271,7 +299,9 @@ function t {
                 } else { $doneMsg = "done: $(& $titleOf $tasks[$pick[0]])" }
             }
             $logLines = @($pick | ForEach-Object { "$day $($tasks[$_])" })
+            $parents = @($pick | ForEach-Object { if ((& $titleOf $tasks[$_]) -match '^([^:]+): ') { $Matches[1] } } | Select-Object -Unique)
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
+            $allDone = @($parents | Where-Object { $p = $_; -not @($tasks | Where-Object { & $isOf $_ @($p) }).Count })
         }
         'del' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
@@ -295,9 +325,10 @@ function t {
                 if ($null -eq $pick) { return }
                 $i = $pick[0]; $new = $tasks[$i]
             } else {
-                $new = $rest -join ' '
-                $i = & $findDupe $new
+                $new = @(& $expand ($rest -join ' '))
+                $i = if ($new.Count -eq 1) { & $findDupe $new[0] } else { -1 }
                 if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i] }
+                elseif ($new.Count -gt 1) { $new = @($new | Where-Object { (& $findDupe $_) -lt 0 }); if (-not $new.Count) { & $say 'Already on your list.' DarkGray; return } }
             }
             $tasks = @($new) + @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } })
         }
@@ -331,10 +362,11 @@ function t {
             # & $ask takes the line as typed, so ' ; # | & and $ need no quoting
             while ($line = "$(& $ask 'Task')".Trim()) {
                 . $read   # a reminder or a sync may have changed the file while this prompt was open
-                $i = & $findDupe $line
-                if ($i -ge 0) { & $say "  already on your list (#$($i + 1))." DarkGray; continue }
-                $tasks += $line
-                if (& $commit 'add') { & $say '  parked.' DarkGray }
+                $all = @(& $expand $line)
+                $new = @($all | Where-Object { (& $findDupe $_) -lt 0 })
+                if (-not $new.Count) { & $say "  already on your list (#$((& $findDupe $all[0]) + 1))." DarkGray; continue }
+                $tasks += $new
+                if (& $commit 'add') { & $say $(if ($new.Count -gt 1) { "  parked $($new.Count) steps." } else { '  parked.' }) DarkGray }
             }
             return
         }
@@ -360,7 +392,7 @@ function t {
                         # brought back, and routine tasks, which the routine adds itself
                         $since = $c.LastWriteTime.AddDays(-7).ToString('yyyy-MM-dd')
                         $gone = @($doneLines | Where-Object { $_.Length -gt 11 -and $_.Substring(0, 10) -ge $since } | ForEach-Object { $_.Substring(11) -replace '^missed: ', '' })
-                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and -not (& $isOf $_ @($items | ForEach-Object { $_.Text })) })
+                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and -not (& $isOf $_ @($items | ForEach-Object { $_.Key; $_.Titles })) })
                         $drop += $c
                     }
                     '^done' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }
@@ -407,7 +439,7 @@ function t {
             foreach ($l in $new) {
                 $r = & $parseLine $l 0
                 if (-not $r) { continue }
-                if (@($items).Text -contains $r.Text) { & $say "  already in your routine: $($r.Text)" DarkGray; continue }
+                if (@($items | ForEach-Object { $_.Key }) -contains $r.Key) { & $say "  already in your routine: $($r.Key)" DarkGray; continue }
                 $lines += ("$l".Trim() -replace '(?<=\b(sun|mon|tue|wed|thu|fri|sat))\s*,\s*(?=(sun|mon|tue|wed|thu|fri|sat)\b)', ',')
                 $items += $r
                 & $say "  added to your routine: $($r.Text) ($(& $whenOf $r))" DarkGray
@@ -432,10 +464,10 @@ function t {
         'remind' {
             # Run by the OneTask scheduled task. The routine code above has already put due tasks on top
             # and re-armed the task; this shows them, batched into one toast (several after a wake).
-            if (-not $due.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
+            if (-not $dueShown.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
             $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
             $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
-            $lines = @(if ($due.Count -eq 1) { $due[0] } else { "$($due.Count) tasks due"; $due -join ', ' })
+            $lines = @(if ($dueShown.Count -eq 1) { $dueShown[0] } else { "$($dueShown.Count) tasks due"; $dueShown -join ', ' })
             $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
             $xml.LoadXml('<toast><visual><binding template="ToastGeneric">' + (($lines | ForEach-Object { "<text>$([Security.SecurityElement]::Escape($_))</text>" }) -join '') + '</binding></visual></toast>')
             $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
@@ -554,15 +586,17 @@ function t {
             return
         }
         default {
-            $i = & $findDupe ($a -join ' ')
-            if ($i -ge 0) { & $say "already on your list (#$($i + 1))." DarkGray; return }
-            $tasks += ($a -join ' ')
-            if (& $commit 'park') { & $say 'parked.' DarkGray }
+            $all = @(& $expand ($a -join ' '))
+            $new = @($all | Where-Object { (& $findDupe $_) -lt 0 })
+            if (-not $new.Count) { & $say "already on your list (#$((& $findDupe $all[0]) + 1))." DarkGray; return }
+            $tasks += $new
+            if (& $commit 'park') { & $say $(if ($new.Count -gt 1) { "parked $($new.Count) steps." } else { 'parked.' }) DarkGray }
             return
         }
     }
     if (-not (& $commit $cmd $logLines)) { return }
     if ($doneMsg) { & $say "$doneMsg  (t undo to revert)" Green }
+    foreach ($p in $allDone) { & $say "${p}: all steps done." Green }
     t
 }
 

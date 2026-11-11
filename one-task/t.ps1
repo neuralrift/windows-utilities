@@ -562,16 +562,33 @@ function t {
                 [pscustomobject]@{ Total = $days.Count; Kept = $kept; Pct = $pct; Streak = $streak; Color = $(if ($pct -ge 80) { 'Green' } elseif ($pct -ge 50) { 'Yellow' } else { 'Red' }) }
             }
             if ($rest.Count) {
-                $name  = $rest -join ' '
-                $mine  = @($hist | Where-Object { & $isOf $_.Title @($name) })
-                $entry = @($items | Where-Object { $_.Key -eq $name })[0]
-                if (-not $mine.Count -and -not $entry) {
-                    # "log" also starts real tasks ("log hours"): with no history for the text, it is one
-                    if ((& $findDupe "log $name") -ge 0) { & $say 'already on your list.' DarkGray; return }
-                    $tasks += "log $name"
-                    if (& $commit 'park') { & $say "parked. (no history for '$name')" DarkGray }
-                    return
+                # t log <text> only reports. The text is a name (a task title, a parent, a routine entry), with or
+                # without the colon; failing that, the one name it is part of or that is part of it.
+                $q = (($rest -join ' ').Trim() -replace ':$', '').Trim()
+                $keys = @($items | Where-Object { $_.Valid -and -not $_.On } | ForEach-Object { $_.Key })
+                $known = @(@($hist | ForEach-Object { $_.Title; & $parentOf $_.Title }) + $keys | Where-Object { $_ } | Select-Object -Unique)
+                $name = @($known | Where-Object { $_ -eq $q })[0]
+                if (-not $name) {
+                    $c = @($known | Where-Object { $_.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ($_.Length -ge 3 -and $q.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0) })
+                    $c = @($c | Where-Object { $p = & $parentOf $_; -not ($p -and $c -contains $p) })   # a parent stands for its tasks
+                    if (-not $c.Count) {
+                        & $say "nothing logged for '$q'." DarkGray
+                        if ($keys.Count) { & $say "routine names: $(($keys | Select-Object -Unique) -join ', ')" DarkGray }
+                        return
+                    }
+                    if ($c.Count -gt 1) {
+                        foreach ($x in @($c | Select-Object -First 20)) {
+                            $h = @($hist | Where-Object { & $isOf $_.Title @($x) })
+                            & $say "  $x  $(@($h | Where-Object { $_.Kind -eq 'done' }).Count) done, $(@($h | Where-Object { $_.Kind -eq 'missed' }).Count) missed"
+                        }
+                        if ($c.Count -gt 20) { & $say "  and $($c.Count - 20) more" DarkGray }
+                        & $say 'Several match. Use one of these names: t log <name>' DarkGray
+                        return
+                    }
+                    $name = $c[0]
                 }
+                $mine  = @($hist | Where-Object { & $isOf $_.Title @($name) })
+                $entry = @($items | Where-Object { $_.Valid -and $_.Key -eq $name })[0]
                 if ($entry -or @($mine | Where-Object { $_.Kind -eq 'missed' }).Count) {
                     & $say $(if ($entry) { "$($entry.Key)  $(& $whenOf $entry)" } else { $name })
                     $days = @(& $daysOf $name)

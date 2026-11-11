@@ -180,13 +180,18 @@ try {
     [IO.File]::WriteAllLines("$dir\done.txt", [string[]]('2026-11-02 gym', '2026-11-03 missed: gym', '2026-11-04 gym // legs', '2026-11-05 gym', '2026-11-06 blog: post one', '2026-10-01 gym', '2026-11-09 dropped: blog: idea'))
     Is 'log name'      (Run log gym)     'gym|last 4 weeks: 3 of 4 days (75%), streak 2|x . x x'
     Is 'log prefix'    (Run log blog)    'blog: 1 done (0 this week), last on 2026-11-06, 1 dropped'
-    Is 'log unknown'   (Run log hours)   "parked. (no history for 'hours')"
-    Is 'log parked'    (File todo.txt)   'log hours'
+    Is 'log unknown'   (Run log hours)   "nothing logged for 'hours'."
+    Is 'log no park'   (File todo.txt)   ''
+    Is 'log part'      (Run log gy)      'gym|last 4 weeks: 3 of 4 days (75%), streak 2|x . x x'
+    Is 'log colon'     (Run g blog:)     'blog: 1 done (0 this week), last on 2026-11-06, 1 dropped'
+    Is 'log several'   (Run log g)       '  gym  4 done, 1 missed|  blog  1 done, 0 missed|Several match. Use one of these names: t log <name>'
     Is 'log week'      (Run log)         'this week: 0 done, 1 dropped, 0 missed'
     Reset -Routine 'weekdays 14:00 timesheet', 'weekdays 07:00 morning:', '  stretch', '  shower', 'weekends 10:00 gym', 'tomorrow 10:00 one off'
     [IO.File]::WriteAllLines("$dir\done.txt", [string[]]('2026-11-05 timesheet', '2026-11-06 missed: timesheet', '2026-11-06 morning: stretch', '2026-11-06 missed: morning: shower', '2026-11-05 morning: stretch', '2026-11-05 morning: shower'))
     Is 'log routine'   (Run log timesheet)   'timesheet  weekdays at 14:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
     Is 'log steps'     (Run log morning)     'morning  weekdays at 07:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
+    Is 'log loose'     (Run log morning routine)   'morning  weekdays at 07:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
+    Is 'log none'      (Run log zzz)         "nothing logged for 'zzz'.|routine names: timesheet, morning, gym"
     Is 'log empty'     (Run log gym)         'gym  weekends at 10:00|nothing logged in the last 4 weeks.'
     Is 'log overview'  (Run log)             'this week: 0 done, 0 dropped, 0 missed|routine, last 4 weeks:|  timesheet  1 of 2 days  50%  streak 0|  morning    1 of 2 days  50%  streak 0|  gym        nothing logged yet'
     # --- parent blocks ---

@@ -42,7 +42,8 @@ try {
     Is 'skip'         (Run skip)                 "$arrow call bank"
     Is 'done'         (Run done)                 "$arrow write report"
     Is 'done.txt'     (File done.txt)            '2026-11-09 call bank'
-    Is 'list word'    (Run list groceries)       'parked.'
+    Is 'list word'    (Run list groceries)       't list takes nothing after it. To park that text, quote it: t "list groceries"'
+    Is 'literal'      (Run 'list groceries')     'parked.'
     Is 'todo.txt'     (File todo.txt)            'write report|list groceries'
     Is 'list'         (Run list)                 '1. write report||2. list groceries|'
     Answers 'n'
@@ -51,10 +52,7 @@ try {
     Answers 'y'
     Is 'del yes'      (Run del 2)                "  list groceries|$arrow write report"
     Is 'del logged'   (File done.txt)            '2026-11-09 call bank|2026-11-09 dropped: list groceries'
-    Is 'note'         (Run note ask Sam)         "$arrow write report|  ask Sam"
-    Is 'split'        (Run split a / b)          "$arrow write report: a|  (2 steps left)|  ask Sam"
-    Is 'split file'   (File todo.txt)            'write report:|  a // ask Sam|  b'
-    Is 'help word'    (Run help Sam move)        'parked.'
+    Is 'help word'    (Run help Sam move)        't help takes nothing after it. To park that text, quote it: t "help Sam move"'
     Is 'commas'       (Run buy milk, eggs)       'parked.'
     Is 'commas file'  ((File todo.txt) -replace '^.*\|', '')   'buy milk, eggs'
 
@@ -72,12 +70,14 @@ try {
 
     # --- step 2: reliability ---
     Reset -Routine 'review inbox'
-    Run note check finance | Out-Null
+    Run | Out-Null
+    [IO.File]::WriteAllLines("$dir\todo.txt", [string[]]'review inbox // check finance')
     At '2026-11-10 09:00'; Run | Out-Null
     Is 'note: one copy'   (File todo.txt)      'review inbox'
     Is 'note: missed'     (File done.txt)      '2026-11-09 missed: review inbox'
     Reset -Routine 'review inbox'
-    Run split a / b | Out-Null
+    Run | Out-Null
+    [IO.File]::WriteAllLines("$dir\todo.txt", [string[]]('review inbox:', '  a', '  b'))
     At '2026-11-10 09:00'; Run | Out-Null
     Is 'split: replaced'  (File todo.txt)      'review inbox'
     Reset 'a'
@@ -97,8 +97,9 @@ try {
     Is 'undo by text'     (File todo.txt)      'a|c'
     Answers 'y'
     Is 'done several'     (Run done 1 2)       '  a|  c|done: 2 tasks  (t undo to revert)|Nothing to do. Add one: t <task>'
-    Is 'undo word'        (Run undo the mess)  'parked.'
-    Run x | Out-Null; Run undo | Out-Null
+    Is 'undo word'        (Run undo the mess)  't undo takes nothing after it. To park that text, quote it: t "undo the mess"'
+    Is 'undo literal'     (Run 'undo the mess')  'parked.'
+    Run xx | Out-Null; Run undo | Out-Null
     Is 'undo park'        (File todo.txt)      'undo the mess'
 
     # --- step 3: commands ---
@@ -110,14 +111,8 @@ try {
     Is 'now new'        (Run now fix bug)            "$arrow fix bug"
     Is 'now alone'      (Run now)                    'Usage: t now <task>, or t now <number> to move a task to the top'
     Is 'top parks'      (Run top 2)                  'parked.'
-    Reset 'call bank // ask fee'
-    Is 'reword'         (Run reword phone the bank)  "$arrow phone the bank|  ask fee"
-    Run reword phone the bank // | Out-Null
-    Is 'reword clears'  (File todo.txt)              'phone the bank'
+    Reset 'phone the bank'
     Is 'skip one'       (Run skip)                   'Only one task on your list.'
-    Answers 'x', 'y', ''
-    Is 'split prompt'   (Run split)                  "$arrow phone the bank: x|  (2 steps left)"
-    Is 'split file 2'   (File todo.txt)              'phone the bank:|  x|  y'
     Reset
     Is 'skip empty'     (Run skip)                   'Nothing to do. Add one: t <task>'
     Is 'done empty'     (Run done)                   'Nothing to do. Add one: t <task>'
@@ -128,21 +123,35 @@ try {
     Is 'routine prompt' (Run routine add)            '  added to your routine: timesheet (weekdays at 14:00)'
     Answers 'y'
     Is 'routine del'    (Run routine del 1)          '  add tests  every day, in the morning|  removed 1 from your routine.'
-    Is 'help'           ((Run help).Split('|')[0])   'Every day'
+    Is 'help'           ((Run help).Split('|')[0])   'Capture'
 
     # --- step 4: steps ---
     Reset
-    Is 'inline steps'   (Run report: draft / review / send)   'parked 3 steps.'
-    Is 'steps file'     (File todo.txt)                       'report:|  draft|  review|  send'
-    Is 'steps left'     (Run)                                 "$arrow report: draft|  (3 steps left)"
-    Is 'steps again'    (Run report: draft / review)          'already on your list (#1).'
-    Is 'no parent'      (Run call mom / dad)                  'parked.'
-    Is 'now steps'      (Run now fix: find / patch)           "$arrow fix: find|  (2 steps left)"
+    Is 'under new'      (Run report: draft)        'parked.'
+    Is 'under known'    (Run Report: review)       'parked under report.'
+    Answers 'send', "don't forget", 'draft', ''
+    Is 'bulk'           (Run report:)              'Added 2 tasks under report.'
+    Is 'steps file'     (File todo.txt)            "report:|  draft|  review|  send|  don't forget"
+    Is 'steps left'     (Run)                      "$arrow report: draft|  (4 steps left)"
+    Is 'steps again'    (Run report: draft)        'already on your list (#1).'
+    Run undo | Out-Null
+    Is 'bulk undo'      (File todo.txt)            'report:|  draft|  review'
+    Is 'near hint'      (Run reprot: x)            "parked.|new group 'reprot' (close to 'report'; t undo)"
+    Is 'no parent'      (Run call mom / dad)       'parked.'
+    Is 'literal verb'   (Run 'done the dishes')    'parked.'
+    Answers ''
+    Is 'bulk empty'     (Run chores:)              'Nothing added.'
+    Reset 'fix:', '  find', '  patch', 'other'
     Run done | Out-Null
-    Is 'last step'      (Run done)                            "fix: all steps done.|$arrow report: draft|  (3 steps left)"
-    Reset
-    Is 'steps + note'   (Run trip: book / pack // by friday)  'parked 2 steps.'
-    Is 'note on first'  (File todo.txt)                       'trip:|  book // by friday|  pack'
+    Is 'last step'      (Run done)                 "fix: all steps done.|$arrow other"
+    Reset 'a', 'b'
+    Is 'short l'        (Run l)                    (Run list)
+    Is 'short s'        (Run s)                    "$arrow b"
+    Is 'short d'        (Run d)                    "$arrow a"
+    Is 'short u'        (Run u)                    "undone: done|$arrow b"
+    Is 'short h'        ((Run h).Split('|')[0])    'Capture'
+    Is 'old verb parks' (Run note it down)         'parked.'
+    Is 'skip text'      (Run skip this)            't skip takes nothing after it. To park that text, quote it: t "skip this"'
     Reset -Routine 'weekdays 07:00 morning: stretch / shower', 'weekdays plan: review / pick' -Now '2026-11-09 06:00'
     Is 'routine steps'  (File todo.txt)                       ''
     Run | Out-Null
@@ -190,9 +199,7 @@ try {
     # --- step 6: ages and nudges ---
     Reset 'a', 'b'
     1..6 | ForEach-Object { Run skip | Out-Null }          # a is skipped three times and back on top
-    Is 'skip nudge'     (Run)             "$arrow a|skipped 3 times: split it (t split), reword it, or drop it (t del)?"
-    Run reword a better | Out-Null
-    Is 'reword resets'  (Run)             "$arrow a better"
+    Is 'skip nudge'     (Run)             "$arrow a|skipped 3 times: too big, or not wanted? (t e to reword it, t del to drop it)"
     Reset 'old one'
     Run new one | Out-Null
     Is 'no age yet'     (Run list)        '1. old one||2. new one|'
@@ -202,12 +209,12 @@ try {
     Run fresh // note | Out-Null
     Is 'age weeks'      (Run list)        '1. old one|  4w|2. new one|  4w|3. fresh|  // note'
     Reset 'a', 'b', 'c'
-    Run d | Out-Null
+    Run dd | Out-Null
     At '2026-12-07 09:00'
     Is 'waiting hint'   (Run done)        "$arrow b|waiting 4 weeks: c  (t now 2)"
     Is 'hint once'      (Run done)        "$arrow c"
     Run undo | Out-Null
-    Is 'age survives'   (Run list)        '1. b|  4w|2. c|  4w|3. d|  4w'
+    Is 'age survives'   (Run list)        '1. b|  4w|2. c|  4w|3. dd|  4w'
 
     # --- step 7: log ---
     Reset
@@ -228,8 +235,8 @@ try {
     Is 'block read'     (Run)                 "$arrow orphan"
     Is 'read no write'  (File todo.txt)       "  orphan|Report:|`tDraft // due monday|- Review||    Send|call dentist|Empty:|last"
     Is 'block list'     (Run list)            '1. orphan||   Report:|2.   Draft|  // due monday|3.   Review||4.   Send||5. call dentist||6. last|'
-    Run x | Out-Null
-    Is 'block written'  (File todo.txt)       'orphan|Report:|  Draft // due monday|  Review|  Send|call dentist|last|x'
+    Run xx | Out-Null
+    Is 'block written'  (File todo.txt)       'orphan|Report:|  Draft // due monday|  Review|  Send|call dentist|last|xx'
     Reset
     Run x: a | Out-Null; Run y | Out-Null; Run X: b | Out-Null
     Is 'block gathers'  (File todo.txt)       'x:|  a|  b|y'

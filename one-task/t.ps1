@@ -1,8 +1,8 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
-# Usage: t | t <task> [// note] | t add | t done [n ...|text] | t del [n ...|text] | t skip | t now <task|n>
-#        t note <text> | t reword <text> | t split [<a> / <b>] | t list | t log [name] | t undo | t edit | t merge | t help
+# Usage: t | t <task> [// note] | t <Parent>: [<task>] | t "<text as typed>"
+#        t list | t done [n ...] | t del [n ...] | t skip | t now <task|n> | t log [name] | t undo | t edit | t merge | t help
 #        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
-#        t setup | t uninstall   (t remind is run by the scheduled task)
+#        t setup | t uninstall   (t --remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Folder,   # the task folder, used as is (what setup writes to the profile line)
@@ -16,21 +16,25 @@ $OneTaskDir     = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'App
 $OneTaskMarker  = '# one-task'
 
 function t {
+    # One argument containing a space was quoted: it is task text as typed, whatever it starts with
+    $literal = $args.Count -eq 1 -and $args[0] -is [string] -and $args[0].Contains(' ')
     # PowerShell turns "milk, eggs" or "mon,thu" into an array argument; put the commas back
-    $a    = @($args | ForEach-Object { if ($_ -is [array]) { $_ -join ', ' } else { [string]$_ } })
-    $cmd  = if ($a.Count) { $a[0] } else { '' }
-    $rest = @($a | Select-Object -Skip 1)
-    # t routine [list|add|edit|del]: list, add and edit only count when alone, as for tasks, so
+    $a = @($args | ForEach-Object { if ($_ -is [array]) { $_ -join ', ' } else { [string]$_ } })
+    # The first word is a verb (or its one-letter form) or the start of a task. A verb never parks.
+    $short = @{ l = 'list'; f = 'find'; d = 'done'; s = 'skip'; n = 'now'; x = 'del'; e = 'edit'; u = 'undo'; r = 'routine'; g = 'log'; h = 'help'; '-h' = 'help'; '--help' = 'help'; '?' = 'help' }
+    $words = 'list', 'find', 'done', 'skip', 'now', 'del', 'edit', 'undo', 'routine', 'log', 'help', 'merge', 'setup', 'uninstall', 'remind', '--remind'
+    $cmd = ''; $rest = @()
+    if ($a.Count) {
+        $w = if ($short.ContainsKey($a[0])) { $short[$a[0]] } else { $a[0].ToLower() }
+        if (-not $literal -and $w -in $words) { $cmd = $w; $rest = @($a | Select-Object -Skip 1) } else { $cmd = 'park'; $rest = $a }
+    }
+    # t routine [list|add|edit|del]: list, add and edit only count when alone, so
     # "t routine add tests" is the routine line "add tests"; anything else after "routine" is a line to add
     if ($cmd -eq 'routine') {
         $sub = if ($rest.Count) { $rest[0] } else { 'list' }
         if ($sub -eq 'del' -or ($sub -in 'list', 'add', 'edit' -and $rest.Count -le 1)) { $rest = @($rest | Select-Object -Skip 1) } else { $sub = 'add' }
         $cmd = "routine $sub"
     }
-    if ($cmd -eq 'edit' -and $rest.Count -eq 1 -and $rest[0] -in 'routine', 'routines') { $cmd = 'routine edit'; $rest = @() }   # old form, kept working
-    # Commands that take no text only count when typed alone: "t list groceries" is parked
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'remind', 'merge', 'skip', 'add', 'undo', 'help', '-h', '--help', '?', 'setup', 'uninstall') { $cmd = 'park' }
-    if ($cmd -in '-h', '--help', '?') { $cmd = 'help' }
 
     $dir   = $OneTaskDir
     $TODO  = Join-Path "$dir\" 'todo.txt'
@@ -101,6 +105,10 @@ function t {
     $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
 
+    if ($rest.Count -and $cmd -in 'list', 'skip', 'edit', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
+        & $say "t $cmd takes nothing after it. To park that text, quote it: t `"$($a -join ' ')`"" Yellow; return
+    }
+    if ($cmd -in 'remind', 'find') { & $say "t $cmd is not ready yet." Yellow; return }
     if ($cmd -notin 'setup', 'uninstall') {
         if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
@@ -227,7 +235,7 @@ function t {
             # Reminders: one scheduled task, re-armed for the next timed routine task after every
             # reminder run and whenever routine.txt changes. Setup creates $key; without it nothing is armed.
             $stamp = "$((Get-Item $ROUTINE).LastWriteTimeUtc.Ticks)"
-            if (-not $OneTaskNoArm -and (Test-Path $key) -and ($cmd -eq 'remind' -or (Get-ItemProperty $key).Stamp -ne $stamp)) {
+            if (-not $OneTaskNoArm -and (Test-Path $key) -and ($cmd -eq '--remind' -or (Get-ItemProperty $key).Stamp -ne $stamp)) {
                 $next = $null
                 for ($x = 0; $x -le 7 -and -not $next; $x++) {
                     $d = $now.Date.AddDays($x)
@@ -242,7 +250,7 @@ function t {
                 if ($next) { $trig += New-ScheduledTaskTrigger -Once -At $next }
                 # Always Windows PowerShell: toasts need WinRT, which PowerShell 7 lacks
                 Register-ScheduledTask OneTask -Force `
-                    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$OneTaskScript`" -Folder `"$OneTaskDir`" remind") `
+                    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$OneTaskScript`" -Folder `"$OneTaskDir`" --remind") `
                     -Trigger $trig `
                     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) `
                     -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited) | Out-Null
@@ -370,7 +378,7 @@ function t {
                 if ($parts.Count -gt 1) { & $say "  $($parts[1])" DarkGray }
                 # A nudge, never a prompt: a task skipped again and again is probably too big or not wanted
                 $e = if (Test-Path $agePath) { (& $readAge)[$parts[0].Trim()] }
-                if ($e -and $e.Skips -ge 3) { & $say "skipped $($e.Skips) times: split it (t split), reword it, or drop it (t del)?" DarkGray }
+                if ($e -and $e.Skips -ge 3) { & $say "skipped $($e.Skips) times: too big, or not wanted? (t e to reword it, t del to drop it)" DarkGray }
             }
             elseif (-not $OneTaskOpening) { & $say 'Nothing to do. Add one: t <task>' DarkGray }
             if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
@@ -378,34 +386,27 @@ function t {
         }
         'help' {
             @(
-                'Every day'
-                '  t                        show the current task'
+                'Capture'
                 '  t <task> [// note]       park a task at the bottom'
-                '  t <name>: <a> / <b>      park a task as steps'
-                '  t done                   finish the current task'
-                '  t skip                   move it to the bottom'
-                '  t now <task|number>      put a task at the top, or move one there'
-                'Tasks'
-                '  t list                   all tasks, numbered'
-                '  t done <n ...|text>      finish chosen tasks'
-                '  t del [n ...|text]       remove tasks (logged as dropped)'
-                '  t note <text>            add a note to the current task'
-                '  t reword <text>          change the current task''s text'
-                '  t split <a> / <b> ...    replace the current task with its steps'
-                '  t add                    type tasks one per line, any characters'
-                '  t undo                   take back the last change'
-                '  t log [name]             what you finished; how well a routine is kept'
-                'Routine'
-                '  t routine                the routine, numbered, with when each runs'
-                '  t routine <line>         add: [days] [time] [quiet] task, e.g. weekdays 14:00 timesheet'
-                '  t routine del <n|text>   remove from the routine'
-                '  t routine add | edit     type lines, or open routine.txt'
-                'Other'
-                '  t edit                   open todo.txt in your editor'
-                '  t merge                  merge conflict copies from your sync app'
-                '  t setup | t uninstall    install or remove'
+                '  t <Parent>: <task>       park it under a parent (made if new)'
+                '  t <Parent>:              type several tasks for a parent'
+                '  t "<text>"               park the text as typed, even if it starts with a verb'
+                'Verbs'
+                '  t                        show the current task'
+                '  t list   | l             all tasks, numbered'
+                '  t done   | d [n ...]     finish the current task, or chosen ones'
+                '  t skip   | s             move the current task to the bottom'
+                '  t now    | n <task|n>    put a task at the top, or move one there'
+                '  t del    | x [n ...]     remove tasks (logged as dropped)'
+                '  t edit   | e             open todo.txt in your editor'
+                '  t undo   | u             take back the last change'
+                '  t log    | g [name]      what you finished; how well a routine is kept'
+                '  t routine| r             the routine; t routine <line> adds, t routine del <n> removes'
+                '  t help   | h             this help'
+                'Rare'
+                '  t merge | t setup | t uninstall'
             ) | ForEach-Object { if ($_.StartsWith(' ')) { & $say $_ } else { & $say $_ Cyan } }
-            & $say "Tasks with ' ; # | & or `$ need quotes (t `"don't forget`") or t add." DarkGray
+            & $say "A verb never parks. Text with ' ; # | & or `$ needs quotes: t `"don't forget`"" DarkGray
             return
         }
         'log' {
@@ -532,52 +533,11 @@ function t {
                 if ($null -eq $pick) { return }
                 $i = $pick[0]; $new = $tasks[$i]
             } else {
-                $new = @(& $expand ($rest -join ' '))
-                $i = if ($new.Count -eq 1) { & $findDupe $new[0] } else { -1 }
+                $new = $rest -join ' '
+                $i = & $findDupe $new
                 if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i] }
-                elseif ($new.Count -gt 1) { $new = @($new | Where-Object { (& $findDupe $_) -lt 0 }); if (-not $new.Count) { & $say 'Already on your list.' DarkGray; return } }
             }
             $tasks = @($new) + @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } })
-        }
-        'note' {
-            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $text = if ($rest.Count) { $rest -join ' ' } else { & $ask 'Note' }
-            if (-not "$text".Trim()) { return }
-            $tasks[0] = if ($tasks[0] -match ' // ') { "$($tasks[0]); $text" } else { "$($tasks[0]) // $text" }
-        }
-        'reword' {
-            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $text = if ($rest.Count) { $rest -join ' ' } else { & $ask 'New text' }
-            if (-not "$text".Trim()) { return }
-            $old = $tasks[0] -split ' // ', 2
-            # The note is kept unless the new text brings its own ("x // new note") or ends with "//" (no note)
-            $renamed = @((& $titleOf $tasks[0]))
-            $tasks[0] = if ($text -match ' // ') { $text } elseif ($text -match '\s*//$') { ($text -replace '\s*//$', '').Trim() } elseif ($old.Count -gt 1) { "$text // $($old[1])" } else { $text }
-            $renamed += & $titleOf $tasks[0]
-        }
-        'split' {
-            # PowerShell treats ";" as a statement separator, so steps are separated by " / ".
-            # Alone, it asks for the steps one per line, so they can hold any characters.
-            if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $steps = @(if ($rest.Count) { ($rest -join ' ') -split '\s+/\s+' } else { while ($line = "$(& $ask 'Step')".Trim()) { $line } })
-            $steps = @($steps | Where-Object { "$_".Trim() })
-            if ($steps.Count -lt 2) { & $say 'Usage: t split <step> / <step> ...  (or t split alone to type them)' Yellow; return }
-            $parts = $tasks[0] -split ' // ', 2   # the note stays with the first step
-            $new = @($steps | ForEach-Object { "$($parts[0]): $($_.Trim())" })
-            if ($parts.Count -gt 1) { $new[0] += " // $($parts[1])" }
-            $tasks = $new + @($tasks | Select-Object -Skip 1)
-        }
-        'add' {
-            # & $ask takes the line as typed, so ' ; # | & and $ need no quoting
-            while ($line = "$(& $ask 'Task')".Trim()) {
-                . $read   # a reminder or a sync may have changed the file while this prompt was open
-                $all = @(& $expand $line)
-                $new = @($all | Where-Object { (& $findDupe $_) -lt 0 })
-                if (-not $new.Count) { & $say "  already on your list (#$((& $findDupe $all[0]) + 1))." DarkGray; continue }
-                $tasks += $new
-                if (& $commit 'add') { & $say $(if ($new.Count -gt 1) { "  parked $($new.Count) steps." } else { '  parked.' }) DarkGray }
-            }
-            return
         }
         'list' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
@@ -677,7 +637,7 @@ function t {
             & $say "  removed $($gone.Count) from your routine." DarkGray
             return
         }
-        'remind' {
+        '--remind' {
             # Run by the OneTask scheduled task. The routine code above has already put due tasks on top
             # and re-armed the task; this shows them, batched into one toast (several after a wake).
             if (-not $dueShown.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
@@ -802,12 +762,30 @@ function t {
             if ($dir) { & $say "Your tasks were kept in $dir" DarkGray }
             return
         }
-        default {
-            $all = @(& $expand ($a -join ' '))
-            $new = @($all | Where-Object { (& $findDupe $_) -lt 0 })
-            if (-not $new.Count) { & $say "already on your list (#$((& $findDupe $all[0]) + 1))." DarkGray; return }
-            $tasks += $new
-            if (& $commit 'park') { & $say $(if ($new.Count -gt 1) { "parked $($new.Count) steps." } else { 'parked.' }) DarkGray }
+        'park' {
+            $text = $rest -join ' '
+            $have = @($tasks | ForEach-Object { & $parentOf $_ } | Where-Object { $_ } | Select-Object -Unique)
+            # "Report:" alone asks for its tasks, so they can hold any characters; they are added as one change
+            $bulk = if (-not $literal -and $text -match '^(?<p>[^:]+):$') { $Matches.p.Trim() }
+            $p = if ($bulk) { $bulk } else { & $parentOf $text }
+            $known = @($have | Where-Object { $_ -eq $p })[0]
+            $near = if ($p -and -not $known) { @($have | Where-Object { (& $lev $_.ToLower() $p.ToLower()) -le $(if ($p.Length -ge 5) { 2 } else { 1 }) })[0] }
+            if ($bulk) {
+                $typed = @(while ($line = "$(& $ask 'Task')".Trim()) { $line })
+                . $read   # a reminder or a sync may have changed the file while the prompt was open
+                $new = @($typed | ForEach-Object { "${bulk}: $_" } | Where-Object { (& $findDupe $_) -lt 0 } | Select-Object -Unique)
+                if (-not $new.Count) { & $say $(if ($typed.Count) { 'already on your list.' } else { 'Nothing added.' }) DarkGray; return }
+                $tasks += $new
+                if (-not (& $commit 'park')) { return }
+                & $say "Added $($new.Count) task$(if ($new.Count -gt 1) { 's' }) under $(if ($known) { $known } else { $bulk })." DarkGray
+            } else {
+                $i = & $findDupe $text
+                if ($i -ge 0) { & $say "already on your list (#$($i + 1))." DarkGray; return }
+                $tasks += $text
+                if (-not (& $commit 'park')) { return }
+                & $say $(if ($known) { "parked under $known." } else { 'parked.' }) DarkGray
+            }
+            if ($near) { & $say "new group '$p' (close to '$near'; t undo)" DarkGray }
             return
         }
     }

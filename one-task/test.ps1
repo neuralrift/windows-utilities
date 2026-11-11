@@ -281,10 +281,48 @@ try {
     Is 'undo parent'    (File todo.txt)       'Solo:|  two|  one|z'
     Reset 'A:', '  x', '  y'
     Is 'skip nothing'   (Run skip A:)         'Nothing to move.'
+    # --- edit and undo ---
+    Reset 'call bank // ask fee', 'Report:', '  Draft'
+    Is 'e note'         (Run e // by friday)       "$arrow call bank|  ask fee; by friday"
+    Is 'e note n'       (Run e 2 // long one)      "#2: Report: Draft // long one|$arrow call bank|  ask fee; by friday"
+    Is 'e reword'       (Run e 1 phone the bank)   "$arrow phone the bank|  ask fee; by friday"
+    Is 'e reword n'     (Run e 2 Outline)          "#2: Report: Outline // long one|$arrow phone the bank|  ask fee; by friday"
+    Run e 1 phone them // | Out-Null
+    Is 'e clears'       (File todo.txt)            'phone them|Report:|  Outline // long one'
+    Is 'e usage'        (Run e the report)         'Usage: t e | t e [n] // <note> | t e <n> <new text>'
+    Is 'e bad number'   (Run e 9 x)                'No such number. See: t list'
+    Is 'e dupe'         (Run e 1 Report: Outline)  'already on your list (#2).'
+    Is 'e undo'         (Run undo)                 "undone: edit|$arrow phone the bank|  ask fee; by friday"
+    Reset 'old one'
+    Run new one | Out-Null
+    At '2026-11-14 09:00'
+    Run e 1 older one | Out-Null
+    Is 'reword age'     (Run list)                 '1. older one|  5d|2. new one|  5d'
+    if ($dir -notmatch ' ') {
+        Reset 'a', 'b'
+        [IO.File]::WriteAllLines("$dir\ed.cmd", [string[]]'@copy /y "%~dp0next.txt" %1 >nul')
+        $env:VISUAL = $null; $env:EDITOR = "$dir\ed.cmd"
+        [IO.File]::WriteAllLines("$dir\next.txt", [string[]]('  lost', 'Empty:', 'G:', "`tone", 'b'))
+        Is 'editor'         (Run e)              "line 1 was indented under no parent; kept as a task|Empty: had no tasks; removed|$arrow lost"
+        Is 'editor file'    (File todo.txt)      'lost|G:|  one|b'
+        Is 'editor no log'  (File done.txt)      ''
+        Is 'editor undo'    (Run undo)           "undone: edit|$arrow a"
+        Is 'editor undone'  (File todo.txt)      'a|b'
+        [IO.File]::WriteAllLines("$dir\next.txt", [string[]]('a', 'b'))
+        Is 'editor same'    (Run e)              "$arrow a"
+        Is 'nothing to undo' (Run undo)          'Nothing to undo.'
+        [IO.File]::WriteAllLines("$dir\next.txt", [string[]]'weekdays 14:00 x')
+        Is 'routine editor' (Run routine edit)   "$arrow a"
+        Is 'routine file'   (File routine.txt)   'weekdays 14:00 x'
+        Is 'routine undo'   (Run undo)           "undone: routine edit|$arrow a"
+        Is 'routine undone' (File routine.txt)   ''
+        $env:EDITOR = $null
+    }
 } catch {
     # an error stops the run: without this the cases after it would be skipped silently
     $fail++; Write-Host "ERROR after $count cases: $_" -ForegroundColor Red
 } finally {
+    $env:EDITOR = $null
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($fail) { Write-Host "$fail of $count failed ($($PSVersionTable.PSEdition))" -ForegroundColor Red; exit 1 }

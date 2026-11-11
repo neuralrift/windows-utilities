@@ -1,7 +1,8 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> [// note] | t <Parent>: [<task>] | t "<text as typed>"
 #        t list | t find <text> | t done [sel] | t del [sel] | t skip [sel] | t now <task|sel>   (sel: numbers or Parent:)
-#        | t log [name] | t undo | t edit | t merge | t help
+#        | t log [name] | t undo | t merge | t help
+#        t edit | t edit [n] // <note> | t edit <n> <new text>
 #        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
 #        t setup | t uninstall   (t --remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
@@ -106,7 +107,7 @@ function t {
     $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
 
-    if ($rest.Count -and $cmd -in 'list', 'edit', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
+    if ($rest.Count -and $cmd -in 'list', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
         & $say "t $cmd takes nothing after it. To park that text, quote it: t `"$($a -join ' ')`"" Yellow; return
     }
     if ($cmd -eq 'remind') { & $say "t $cmd is not ready yet." Yellow; return }
@@ -310,6 +311,34 @@ function t {
         }
         & $say "t $verb takes numbers or a Parent: (find them with: t find <text>)" Yellow
     }
+    # todo.undo holds what t undo needs for the last change: line 1 what it covers (todo, routine or both),
+    # line 2 the length done.txt had, line 3 the write times of the covered files after the change, line 4 the
+    # command, line 5 how many todo lines follow (flat tasks); the lines after those are routine.txt as it was.
+    $ticksOf = {
+        param($target)
+        @(if ($target -ne 'routine') { "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)" }
+          if ($target -ne 'todo') { if (Test-Path $ROUTINE) { "$((Get-Item $ROUTINE).LastWriteTimeUtc.Ticks)" } else { '0' } }) -join ' '
+    }
+    $stash = {
+        param($target, $len, $what, $oldTodo, $oldRoutine)
+        [IO.File]::WriteAllLines($UNDO, [string[]](@($target, "$len", (& $ticksOf $target), $what, "$(@($oldTodo).Count)") + @($oldTodo) + @($oldRoutine)))
+    }
+    # What an edited todo.txt holds that cannot be kept as written; said once, after the editor closes
+    $lint = {
+        param($lines)
+        $head = $null; $kids = 0; $n = 0
+        foreach ($raw in $lines) {
+            $n++
+            $text = ("$raw" -replace '\s+', ' ').Trim()
+            if (-not $text) { continue }
+            $kid = "$raw" -match '^(\s+|-\s+)'
+            if ($kid -and $head) { $kids++; continue }
+            if ($kid) { "line $n was indented under no parent; kept as a task"; continue }
+            if ($head -and -not $kids) { "${head}: had no tasks; removed" }
+            if ($text -match '^(?<h>[^:]+):$') { $head = $Matches.h.Trim(); $kids = 0 } else { $head = $null }
+        }
+        if ($head -and -not $kids) { "${head}: had no tasks; removed" }
+    }
     # Every change to todo.txt goes through here: refuse if the file changed since it was read (a sync or a
     # reminder), append to done.txt, write safely, and keep the previous state for t undo. Returns $true if written.
     $commit = {
@@ -319,7 +348,7 @@ function t {
         if (@($logLines).Count) { [IO.File]::AppendAllText($DONE, (@($logLines) -join "`r`n") + "`r`n") }
         $tasks = @(& $group $tasks)
         & $save $TODO @(& $toFile $tasks)
-        [IO.File]::WriteAllLines($UNDO, [string[]](@("$len", "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)", $what) + $before))
+        & $stash 'todo' $len $what $before @()
         # Ages: new titles start today; titles gone from the list are dropped, but only once t undo can no longer bring them back
         $ages = & $readAge
         $titles = @($tasks | ForEach-Object { & $titleOf $_ })
@@ -369,7 +398,7 @@ function t {
         }
     }
 
-    $logLines = @(); $doneMsg = $null; $allDone = @(); $bump = $null; $renamed = $null
+    $logLines = @(); $doneMsg = $null; $allDone = @(); $bump = $null; $renamed = $null; $editMsg = $null
     switch ($cmd) {
         '' {
             if ($tasks.Count) {
@@ -404,6 +433,8 @@ function t {
                 '  t del    | x [sel]       remove (logged as dropped)'
                 '                           sel: nothing = the current task, numbers (2 5), or a Parent:'
                 '  t edit   | e             open todo.txt in your editor'
+                '  t e [n] // <note>        add a note (to the current task, or to task n)'
+                '  t e <n> <new text>       reword task n'
                 '  t undo   | u             take back the last change'
                 '  t log    | g [name]      what you finished; how well a routine is kept'
                 '  t routine| r             the routine; t routine <line> adds, t routine del <n> removes'
@@ -484,16 +515,18 @@ function t {
             return
         }
         'undo' {
-            if (-not (Test-Path $UNDO)) { & $say 'Nothing to undo.' DarkGray; return }
-            $u = @([IO.File]::ReadAllLines($UNDO))
-            $same = $u[1] -eq $seen
-            if (-not $same -and (& $ask 'todo.txt changed since then. Undo anyway? [y/N]') -ne 'y') { return }
-            & $save $TODO @(& $toFile @($u | Select-Object -Skip 3))
-            # done.txt is cut back only when nothing else has touched the list, so routine "missed:" lines are never lost
-            if ($same -and (Test-Path $DONE) -and (Get-Item $DONE).Length -gt [long]$u[0]) { $fs = [IO.File]::OpenWrite($DONE); $fs.SetLength([long]$u[0]); $fs.Close() }
+            $u = @(if (Test-Path $UNDO) { [IO.File]::ReadAllLines($UNDO) })
+            if ($u.Count -lt 5 -or $u[0] -notin 'todo', 'routine', 'both') { Remove-Item $UNDO -ErrorAction SilentlyContinue; & $say 'Nothing to undo.' DarkGray; return }
+            $target = $u[0]; $n = [int]$u[4]
+            $same = $u[2] -eq (& $ticksOf $target)
+            if (-not $same -and (& $ask 'Your files changed since then. Undo anyway? [y/N]') -ne 'y') { return }
+            if ($target -ne 'routine') { & $save $TODO @(& $toFile @($u | Select-Object -Skip 5 | Select-Object -First $n)) }
+            if ($target -ne 'todo') { & $save $ROUTINE @($u | Select-Object -Skip (5 + $n)) }
+            # done.txt is cut back only when nothing else has touched the files, so routine "missed:" lines are never lost
+            if ($same -and (Test-Path $DONE) -and (Get-Item $DONE).Length -gt [long]$u[1]) { $fs = [IO.File]::OpenWrite($DONE); $fs.SetLength([long]$u[1]); $fs.Close() }
             elseif (-not $same) { & $say 'done.txt was left as it is.' DarkGray }
             Remove-Item $UNDO
-            & $say "undone: $($u[2])" DarkGray
+            & $say "undone: $($u[3])" DarkGray
             t
             return
         }
@@ -622,12 +655,51 @@ function t {
             return
         }
         { $_ -in 'edit', 'routine edit' } {
-            # A terminal editor first: $VISUAL/$EDITOR, then nvim, vim, nano, Microsoft Edit; Notepad as the fallback
+            if ($rest.Count) {
+                # t e [n] // <note> adds a note; t e <n> <new text> rewords. Without a number, "//" means the current task.
+                $text = $rest -join ' '
+                if ($text -notmatch '^(?:(?<n>\d+) )?// (?<note>.+)$' -and $text -notmatch '^(?<n>\d+) (?<new>.+)$') { & $say 'Usage: t e | t e [n] // <note> | t e <n> <new text>' Yellow; return }
+                $note = $Matches.note; $new = $Matches.new
+                $i = if ($Matches.n) { [int]$Matches.n - 1 } else { 0 }
+                if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
+                if ($i -lt 0 -or $i -ge $tasks.Count) { & $say 'No such number. See: t list' Yellow; return }
+                if ($note) { $tasks[$i] = if ($tasks[$i] -match ' // ') { "$($tasks[$i]); $note" } else { "$($tasks[$i]) // $note" } }
+                else {
+                    # A task of a parent stays in its parent. The note is kept unless the new text brings its own
+                    # ("x // new note") or ends with "//" (no note).
+                    $old = $tasks[$i] -split ' // ', 2
+                    $p = & $parentOf $tasks[$i]
+                    if ($p) { $new = "${p}: $new" }
+                    $line = if ($new -match ' // ') { $new } elseif ($new -match '\s*//$') { ($new -replace '\s*//$', '').Trim() } elseif ($old.Count -gt 1) { "$new // $($old[1])" } else { $new }
+                    $j = & $findDupe $line
+                    if ($j -ge 0 -and $j -ne $i) { & $say "already on your list (#$($j + 1))." DarkGray; return }
+                    $renamed = @((& $titleOf $tasks[$i]), (& $titleOf $line))
+                    $tasks[$i] = $line
+                }
+                if ($i) { $editMsg = "#$($i + 1): $($tasks[$i])" }
+                break
+            }
+            # A terminal editor first: $VISUAL/$EDITOR, then nvim, vim, nano, Microsoft Edit; Notepad as the fallback.
+            # t waits for the editor, Notepad included, so the edit can be checked and taken back with t undo.
             $file = if ($cmd -eq 'edit') { $TODO } else { $ROUTINE }
+            $old = @(if (Test-Path $file) { [IO.File]::ReadAllLines($file) })
             $ed = @($env:VISUAL, $env:EDITOR | Where-Object { $_ })
             if ($ed.Count) { & $env:ComSpec /c "$($ed[0]) `"$file`"" }   # cmd parses an editor command with its own arguments
             elseif ($c = Get-Command nvim, vim, nano, edit -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1) { & $c.Source $file }
-            else { notepad $file; return }
+            else { Start-Process notepad "`"$file`"" -Wait }
+            $raw = @(if (Test-Path $file) { [IO.File]::ReadAllLines($file) })
+            if (($raw -join "`n") -cne ($old -join "`n")) {
+                if ($cmd -eq 'edit') {
+                    & $lint $raw | ForEach-Object { & $say $_ Yellow }
+                    # Stored in the tidy form through $commit, which also keeps the undo state and the ages
+                    $tasks = @(& $fromFile $raw)
+                    $seen = "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)"
+                    if (-not (& $commit 'edit')) { return }
+                } else {
+                    $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
+                    & $stash 'routine' $len 'routine edit' @() $old
+                }
+            }
             t   # show the task again, and re-arm reminders if the routine changed
             return
         }
@@ -834,6 +906,7 @@ function t {
     }
     if (-not (& $commit $cmd $logLines)) { return }
     if ($doneMsg) { & $say "$doneMsg  (t undo to revert)" Green }
+    if ($editMsg) { & $say $editMsg DarkGray }
     foreach ($p in $allDone) { & $say "${p}: all steps done." Green }
     t
     # After a done, at most once a day: point at the task that has waited longest (three weeks or more).

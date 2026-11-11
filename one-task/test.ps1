@@ -53,7 +53,7 @@ try {
     Is 'del logged'   (File done.txt)            '2026-11-09 call bank|2026-11-09 dropped: list groceries'
     Is 'note'         (Run note ask Sam)         "$arrow write report|  ask Sam"
     Is 'split'        (Run split a / b)          "$arrow write report: a|  (2 steps left)|  ask Sam"
-    Is 'split file'   (File todo.txt)            'write report: a // ask Sam|write report: b'
+    Is 'split file'   (File todo.txt)            'write report:|  a // ask Sam|  b'
     Is 'help word'    (Run help Sam move)        'parked.'
     Is 'commas'       (Run buy milk, eggs)       'parked.'
     Is 'commas file'  ((File todo.txt) -replace '^.*\|', '')   'buy milk, eggs'
@@ -117,7 +117,7 @@ try {
     Is 'skip one'       (Run skip)                   'Only one task on your list.'
     Answers 'x', 'y', ''
     Is 'split prompt'   (Run split)                  "$arrow phone the bank: x|  (2 steps left)"
-    Is 'split file 2'   (File todo.txt)              'phone the bank: x|phone the bank: y'
+    Is 'split file 2'   (File todo.txt)              'phone the bank:|  x|  y'
     Reset
     Is 'skip empty'     (Run skip)                   'Nothing to do. Add one: t <task>'
     Is 'done empty'     (Run done)                   'Nothing to do. Add one: t <task>'
@@ -133,7 +133,7 @@ try {
     # --- step 4: steps ---
     Reset
     Is 'inline steps'   (Run report: draft / review / send)   'parked 3 steps.'
-    Is 'steps file'     (File todo.txt)                       'report: draft|report: review|report: send'
+    Is 'steps file'     (File todo.txt)                       'report:|  draft|  review|  send'
     Is 'steps left'     (Run)                                 "$arrow report: draft|  (3 steps left)"
     Is 'steps again'    (Run report: draft / review)          'already on your list (#1).'
     Is 'no parent'      (Run call mom / dad)                  'parked.'
@@ -142,19 +142,19 @@ try {
     Is 'last step'      (Run done)                            "fix: all steps done.|$arrow report: draft|  (3 steps left)"
     Reset
     Is 'steps + note'   (Run trip: book / pack // by friday)  'parked 2 steps.'
-    Is 'note on first'  (File todo.txt)                       'trip: book // by friday|trip: pack'
+    Is 'note on first'  (File todo.txt)                       'trip:|  book // by friday|  pack'
     Reset -Routine 'weekdays 07:00 morning: stretch / shower', 'weekdays plan: review / pick' -Now '2026-11-09 06:00'
     Is 'routine steps'  (File todo.txt)                       ''
     Run | Out-Null
-    Is 'untimed steps'  (File todo.txt)                       'plan: review|plan: pick'
+    Is 'untimed steps'  (File todo.txt)                       'plan:|  review|  pick'
     At '2026-11-09 07:30'; Run | Out-Null
-    Is 'timed steps'    (File todo.txt)                       'morning: stretch|morning: shower|plan: review|plan: pick'
+    Is 'timed steps'    (File todo.txt)                       'morning:|  stretch|  shower|plan:|  review|  pick'
     Run done | Out-Null
     At '2026-11-09 08:00'; Run | Out-Null
-    Is 'no re-add'      (File todo.txt)                       'morning: shower|plan: review|plan: pick'
+    Is 'no re-add'      (File todo.txt)                       'morning:|  shower|plan:|  review|  pick'
     At '2026-11-10 06:00'; Run | Out-Null
     Is 'step missed'    (File done.txt)                       '2026-11-09 morning: stretch|2026-11-09 missed: plan: review|2026-11-09 missed: plan: pick|2026-11-09 missed: morning: shower'
-    Is 'steps fresh'    (File todo.txt)                       'plan: review|plan: pick'
+    Is 'steps fresh'    (File todo.txt)                       'plan:|  review|  pick'
     Is 'routine shows'  (Run routine)                         '1. morning: stretch / shower|  weekdays at 07:00|2. plan: review / pick|  weekdays, in the morning'
     Is 'routine key'    (Run routine morning: other / thing)  '  already in your routine: morning'
 
@@ -223,6 +223,22 @@ try {
     Is 'log steps'     (Run log morning)     'morning  weekdays at 07:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
     Is 'log empty'     (Run log gym)         'gym  weekends, in the morning|nothing logged in the last 4 weeks.'
     Is 'log overview'  (Run log)             'this week: 0 done, 0 dropped, 0 missed|routine, last 4 weeks:|  timesheet  1 of 2 days  50%  streak 0|  morning    1 of 2 days  50%  streak 0|  gym        nothing logged yet'
+    # --- parent blocks ---
+    Reset '  orphan', 'Report:', "`tDraft // due monday", '- Review', '', '    Send', 'call dentist', 'Empty:', 'last'
+    Is 'block read'     (Run)                 "$arrow orphan"
+    Is 'read no write'  (File todo.txt)       "  orphan|Report:|`tDraft // due monday|- Review||    Send|call dentist|Empty:|last"
+    Is 'block list'     (Run list)            '1. orphan||   Report:|2.   Draft|  // due monday|3.   Review||4.   Send||5. call dentist||6. last|'
+    Run x | Out-Null
+    Is 'block written'  (File todo.txt)       'orphan|Report:|  Draft // due monday|  Review|  Send|call dentist|last|x'
+    Reset
+    Run x: a | Out-Null; Run y | Out-Null; Run X: b | Out-Null
+    Is 'block gathers'  (File todo.txt)       'x:|  a|  b|y'
+    Run done | Out-Null
+    Is 'header goes'    (Run done)            "x: all steps done.|$arrow y"
+    Is 'header gone'    (File todo.txt)       'y'
+    Reset 'call bob // re: invoice'
+    Run z | Out-Null
+    Is 'note no parent' (File todo.txt)       'call bob // re: invoice|z'
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

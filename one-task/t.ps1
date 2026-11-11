@@ -47,6 +47,45 @@ function t {
     # Yellow needs attention, Red missed or error. NO_COLOR (any value) turns colour off.
     # A task line is "title // note"; the note is optional. Duplicates are judged on the title alone.
     $titleOf = { param($s) ($s -split ' // ', 2)[0].Trim() }
+    # The parent of a task line ("Report: Draft // note" -> "Report"), or nothing. Judged on the title only.
+    $parentOf = { param($s) if ((& $titleOf $s) -match '^(?<p>[^:]+): .') { $Matches.p.Trim() } }
+    # todo.txt holds a parent as a header line ("Report:") with its tasks indented under it. In memory the
+    # list is flat, each child as "Report: Draft", so everything else works on plain lines.
+    # File lines -> flat tasks. A child is indented (spaces, a tab) or starts with "- ".
+    $fromFile = {
+        param($lines)
+        $head = $null
+        foreach ($raw in $lines) {
+            $text = ("$raw" -replace '\s+', ' ').Trim()
+            if (-not $text) { continue }
+            $kid = "$raw" -match '^(\s+|-\s+)'
+            if ($kid -and $head) { "${head}: $($text -replace '^- ', '')" }
+            elseif (-not $kid -and $text -match '^(?<h>[^:]+):$') { $head = $Matches.h.Trim() }
+            else { if (-not $kid) { $head = $null }; $text }
+        }
+    }
+    # Flat tasks -> file lines: one header for each run of tasks with the same parent
+    $toFile = {
+        param($flat)
+        $cur = $null
+        foreach ($l in $flat) {
+            $p = & $parentOf $l
+            if ($p) { if ($p -ne $cur) { $cur = $p; "${p}:" }; "  $($l.Substring($l.IndexOf(': ') + 2))" }
+            else { $cur = $null; if ($l.EndsWith(':')) { $l.TrimEnd(':') } else { $l } }   # a bare "x:" would read back as an empty header
+        }
+    }
+    # The tasks of one parent sit together, at the place of the first; the first spelling of its name wins
+    $group = {
+        param($flat)
+        $order = @(); $kids = @{}; $name = @{}
+        foreach ($l in $flat) {
+            $p = & $parentOf $l
+            if (-not $p) { $order += $l; continue }
+            if (-not $kids.ContainsKey($p)) { $kids[$p] = @(); $name[$p] = $p; $order += "`t$p" }
+            $kids[$p] = @($kids[$p]) + "$($name[$p]): $($l.Substring($l.IndexOf(': ') + 2))"
+        }
+        foreach ($o in $order) { if ($o.StartsWith("`t")) { $kids[$o.Substring(1)] } else { $o } }
+    }
     # "parent: a / b // note" -> "parent: a // note", "parent: b"; anything without both "parent: " and " / " -> itself.
     # Call it as @(& $expand $text).
     $expand = {
@@ -70,7 +109,7 @@ function t {
         # Dot-run (. $read): sets $tasks, $before and $seen in this scope
         $read = {
             # Lines are tidied as they are read (extra spaces, blank lines); the file is rewritten on the next change
-            $tasks  = @([IO.File]::ReadAllLines($TODO) | ForEach-Object { ($_ -replace '\s+', ' ').Trim() } | Where-Object { $_ })
+            $tasks  = @(& $group @(& $fromFile ([IO.File]::ReadAllLines($TODO))))
             $before = $tasks.Clone()
             $seen   = "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)"
         }
@@ -178,10 +217,10 @@ function t {
                 }
             })
             if ($newDay -or $due.Count) {
-                $tasks = $due + $tasks
+                $tasks = @(& $group ($due + $tasks))
                 $added += @($due | ForEach-Object { & $titleOf $_ })
                 if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
-                & $save $TODO $tasks
+                & $save $TODO @(& $toFile $tasks)
                 & $save $LAST (@($day) + $added)
             }
 
@@ -267,7 +306,8 @@ function t {
         if ("$((Get-Item $TODO).LastWriteTimeUtc.Ticks)" -ne $seen) { & $say 'todo.txt changed meanwhile (a sync or a reminder); nothing was changed. Run it again.' Yellow; return $false }
         $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
         if (@($logLines).Count) { [IO.File]::AppendAllText($DONE, (@($logLines) -join "`r`n") + "`r`n") }
-        & $save $TODO $tasks
+        $tasks = @(& $group $tasks)
+        & $save $TODO @(& $toFile $tasks)
         [IO.File]::WriteAllLines($UNDO, [string[]](@("$len", "$((Get-Item $TODO).LastWriteTimeUtc.Ticks)", $what) + $before))
         # Ages: new titles start today; titles gone from the list are dropped, but only once t undo can no longer bring them back
         $ages = & $readAge
@@ -295,12 +335,35 @@ function t {
     # "3w" or "5d" for a first-seen day; nothing for under three days
     $ageOf = { param($d) $n = ($now.Date - [datetime]::ParseExact($d, 'yyyy-MM-dd', $null)).Days; if ($n -ge 14) { "$([int][Math]::Floor($n / 7))w" } elseif ($n -ge 3) { "${n}d" } }
 
+    # Prints the tasks at the given indexes as t list does: numbered, the tasks of a parent under its header
+    $show = {
+        param($idx)
+        $first = @{}
+        for ($i = 0; $i -lt $tasks.Count; $i++) { $x = & $titleOf $tasks[$i]; if (-not $first.ContainsKey($x)) { $first[$x] = $i + 1 } }
+        $ages = & $readAge
+        $cur = $null
+        foreach ($i in $idx) {
+            $parts = $tasks[$i] -split ' // ', 2
+            $title = $parts[0].Trim()
+            $p = & $parentOf $tasks[$i]
+            $color = if ($i) { 'Gray' } else { 'Cyan' }
+            if ($p -and $p -ne $cur) { & $say "   ${p}:" $(if ($i) { 'Gray' } else { 'Cyan' }) }
+            $cur = $p
+            $text = if ($p) { "  $($title.Substring($title.IndexOf(': ') + 2))" } else { $title }
+            # After the task, dimmed: its note, and its age once it is three days old
+            $dim = $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) + $(if ($ages[$title] -and ($x = & $ageOf $ages[$title].Day)) { "  $x" } else { '' })
+            & $say "$($i + 1). $text" $color -NoNewline
+            if ($first[$title] -ne $i + 1) { & $say $dim DarkGray -NoNewline; & $say "  (same as #$($first[$title]))" Yellow }
+            else { & $say $dim DarkGray }
+        }
+    }
+
     $logLines = @(); $doneMsg = $null; $allDone = @(); $bump = $null; $renamed = $null
     switch ($cmd) {
         '' {
             if ($tasks.Count) {
                 $parts = $tasks[0] -split ' // ', 2
-                $parent = if ($parts[0] -match '^([^:]+): ') { $Matches[1] }
+                $parent = & $parentOf $tasks[0]
                 $left = if ($parent) { @($tasks | Where-Object { & $isOf $_ @($parent) }).Count } else { 0 }
                 if ($left -gt 1) { & $say "$([char]0x25B6) $($parts[0])" Cyan -NoNewline; & $say "  ($left steps left)" DarkGray }
                 else { & $say "$([char]0x25B6) $($parts[0])" Cyan }
@@ -419,7 +482,7 @@ function t {
             $u = @([IO.File]::ReadAllLines($UNDO))
             $same = $u[1] -eq $seen
             if (-not $same -and (& $ask 'todo.txt changed since then. Undo anyway? [y/N]') -ne 'y') { return }
-            & $save $TODO @($u | Select-Object -Skip 3)
+            & $save $TODO @(& $toFile @($u | Select-Object -Skip 3))
             # done.txt is cut back only when nothing else has touched the list, so routine "missed:" lines are never lost
             if ($same -and (Test-Path $DONE) -and (Get-Item $DONE).Length -gt [long]$u[0]) { $fs = [IO.File]::OpenWrite($DONE); $fs.SetLength([long]$u[0]); $fs.Close() }
             elseif (-not $same) { & $say 'done.txt was left as it is.' DarkGray }
@@ -442,7 +505,7 @@ function t {
                 } else { $doneMsg = "done: $(& $titleOf $tasks[$pick[0]])" }
             }
             $logLines = @($pick | ForEach-Object { "$day $($tasks[$_])" })
-            $parents = @($pick | ForEach-Object { if ((& $titleOf $tasks[$_]) -match '^([^:]+): ') { $Matches[1] } } | Select-Object -Unique)
+            $parents = @($pick | ForEach-Object { & $parentOf $tasks[$_] } | Where-Object { $_ } | Select-Object -Unique)
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
             $allDone = @($parents | Where-Object { $p = $_; -not @($tasks | Where-Object { & $isOf $_ @($p) }).Count })
         }
@@ -518,17 +581,7 @@ function t {
         }
         'list' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $first = @{}
-            $ages = & $readAge
-            for ($i = 0; $i -lt $tasks.Count; $i++) {
-                $parts = $tasks[$i] -split ' // ', 2
-                $title = $parts[0].Trim()
-                # After the task, dimmed: its note, and its age once it is three days old
-                $dim = $(if ($parts.Count -gt 1) { "  // $($parts[1])" } else { '' }) + $(if ($ages[$title] -and ($x = & $ageOf $ages[$title].Day)) { "  $x" } else { '' })
-                & $say "$($i + 1). $($parts[0])" $(if ($i) { 'Gray' } else { 'Cyan' }) -NoNewline
-                if ($first.ContainsKey($title)) { & $say $dim DarkGray -NoNewline; & $say "  (same as #$($first[$title]))" Yellow }
-                else { $first[$title] = $i + 1; & $say $dim DarkGray }
-            }
+            & $show @(0..($tasks.Count - 1))
             if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
             return
         }
@@ -544,7 +597,7 @@ function t {
                         # brought back, and routine tasks, which the routine adds itself
                         $since = $c.LastWriteTime.AddDays(-7).ToString('yyyy-MM-dd')
                         $gone = @($doneLines | Where-Object { $_.Length -gt 11 -and $_.Substring(0, 10) -ge $since } | ForEach-Object { $_.Substring(11) -replace '^missed: ', '' })
-                        $newTasks += @($lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and -not (& $isOf $_ @($items | ForEach-Object { $_.Key; $_.Titles })) })
+                        $newTasks += @(& $fromFile $lines | Where-Object { $tasks -notcontains $_ -and $gone -notcontains $_ -and -not (& $isOf $_ @($items | ForEach-Object { $_.Key; $_.Titles })) })
                         $drop += $c
                     }
                     '^done' { $newDone += @($lines | Where-Object { $doneLines -notcontains $_ }); $drop += $c }

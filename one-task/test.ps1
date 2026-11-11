@@ -92,7 +92,8 @@ try {
     Run skip | Out-Null; Run undo | Out-Null
     Is 'undo skip'        (File todo.txt)      'a|b|c'
     Is 'done by number'   (Run done 2)         "done: b  (t undo to revert)|$arrow a"
-    Is 'done by text'     (Run done c)         "done: c  (t undo to revert)|$arrow a"
+    Is 'done by text'     (Run done c)         't done takes numbers or a Parent: (find them with: t find <text>)'
+    Run done 2 | Out-Null
     Run undo | Out-Null
     Is 'undo by text'     (File todo.txt)      'a|c'
     Answers 'y'
@@ -109,7 +110,7 @@ try {
     Is 'now bad'        (Run now 9)                  'No such number. See: t list'
     Is 'now dupe'       (Run now B)                  "Already on your list; moved to the top.|$arrow b"
     Is 'now new'        (Run now fix bug)            "$arrow fix bug"
-    Is 'now alone'      (Run now)                    'Usage: t now <task>, or t now <number> to move a task to the top'
+    Is 'now alone'      (Run now)                    'Usage: t now <task>, t now <numbers> or t now <Parent>:'
     Is 'top parks'      (Run top 2)                  'parked.'
     Reset 'phone the bank'
     Is 'skip one'       (Run skip)                   'Only one task on your list.'
@@ -151,7 +152,7 @@ try {
     Is 'short u'        (Run u)                    "undone: done|$arrow b"
     Is 'short h'        ((Run h).Split('|')[0])    'Capture'
     Is 'old verb parks' (Run note it down)         'parked.'
-    Is 'skip text'      (Run skip this)            't skip takes nothing after it. To park that text, quote it: t "skip this"'
+    Is 'skip text'      (Run skip this)            't skip takes numbers or a Parent: (find them with: t find <text>)'
     Reset -Routine 'weekdays 07:00 morning: stretch / shower', 'weekdays plan: review / pick' -Now '2026-11-09 06:00'
     Is 'routine steps'  (File todo.txt)                       ''
     Run | Out-Null
@@ -246,6 +247,43 @@ try {
     Reset 'call bob // re: invoice'
     Run z | Out-Null
     Is 'note no parent' (File todo.txt)       'call bob // re: invoice|z'
+    # --- selection ---
+    Reset 'p', 'Report:', '  Draft', '  Review', '  Send', 'q', 'Home:', '  bins', '  lawn'
+    Is 'find'           (Run find LAW)        '   Home:|7.   lawn|'
+    Is 'find none'      (Run f zzz)           "Nothing matches 'zzz'."
+    Is 'find usage'     (Run find)            'Usage: t find <text>'
+    Run skip 2 | Out-Null
+    Is 'skip step'      (File todo.txt)       'p|Report:|  Review|  Send|  Draft|q|Home:|  bins|  lawn'
+    Run skip 1, 6 | Out-Null
+    Is 'skip batch'     (File todo.txt)       'Report:|  Review|  Send|  Draft|q|Home:|  lawn|  bins|p'
+    Run undo | Out-Null
+    Is 'batch one undo' (File todo.txt)       'p|Report:|  Review|  Send|  Draft|q|Home:|  bins|  lawn'
+    Run skip 1 6 | Out-Null
+    Run skip Report: | Out-Null
+    Is 'skip parent'    (File todo.txt)       'q|Home:|  lawn|  bins|p|Report:|  Review|  Send|  Draft'
+    Run now 3 | Out-Null
+    Is 'now step'       (File todo.txt)       'Home:|  bins|  lawn|q|p|Report:|  Review|  Send|  Draft'
+    Run now 4 7 | Out-Null
+    Is 'now several'    (File todo.txt)       'p|Report:|  Draft|  Review|  Send|Home:|  bins|  lawn|q'
+    Run now home: | Out-Null
+    Is 'now parent'     (File todo.txt)       'Home:|  bins|  lawn|p|Report:|  Draft|  Review|  Send|q'
+    Is 'no parent'      (Run done Nope:)      "No parent 'Nope'. See: t list"
+    Is 'bad selection'  (Run del some text)   't del takes numbers or a Parent: (find them with: t find <text>)'
+    Is 'unchanged'      (File todo.txt)       'Home:|  bins|  lawn|p|Report:|  Draft|  Review|  Send|q'
+    Reset 'Solo:', '  one', 'z'
+    Run skip | Out-Null
+    Is 'skip last step' (File todo.txt)       'z|Solo:|  one'
+    Run now Solo: two | Out-Null
+    Is 'now new step'   (File todo.txt)       'Solo:|  two|  one|z'
+    Answers 'y'
+    Is 'done parent'    (Run done solo:)      "  Solo: two|  Solo: one|done: 2 tasks  (t undo to revert)|Solo: all steps done.|$arrow z"
+    Run undo | Out-Null
+    Is 'undo parent'    (File todo.txt)       'Solo:|  two|  one|z'
+    Reset 'A:', '  x', '  y'
+    Is 'skip nothing'   (Run skip A:)         'Nothing to move.'
+} catch {
+    # an error stops the run: without this the cases after it would be skipped silently
+    $fail++; Write-Host "ERROR after $count cases: $_" -ForegroundColor Red
 } finally {
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 }

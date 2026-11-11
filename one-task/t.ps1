@@ -1,6 +1,7 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> [// note] | t <Parent>: [<task>] | t "<text as typed>"
-#        t list | t done [n ...] | t del [n ...] | t skip | t now <task|n> | t log [name] | t undo | t edit | t merge | t help
+#        t list | t find <text> | t done [sel] | t del [sel] | t skip [sel] | t now <task|sel>   (sel: numbers or Parent:)
+#        | t log [name] | t undo | t edit | t merge | t help
 #        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
 #        t setup | t uninstall   (t --remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
@@ -105,10 +106,10 @@ function t {
     $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
 
-    if ($rest.Count -and $cmd -in 'list', 'skip', 'edit', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
+    if ($rest.Count -and $cmd -in 'list', 'edit', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
         & $say "t $cmd takes nothing after it. To park that text, quote it: t `"$($a -join ' ')`"" Yellow; return
     }
-    if ($cmd -in 'remind', 'find') { & $say "t $cmd is not ready yet." Yellow; return }
+    if ($cmd -eq 'remind') { & $say "t $cmd is not ready yet." Yellow; return }
     if ($cmd -notin 'setup', 'uninstall') {
         if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
@@ -287,25 +288,27 @@ function t {
         }
         if (-not $r.At -and $f -match '^\d{1,2}([:.h]\d{2})?(a|p|am|pm)?$' -and $f -match '[:.hap]') { return "'$f' looks like a time; use forms such as 14:00 or 2pm" }
     }
-    # Picks entries of $list by numbers, or by text when exactly one contains it; says why when it cannot
-    # (done, del and top on tasks; routine del on routine lines)
+    # One selection rule for done, del, skip and now (and routine del, on routine lines): nothing is the
+    # current task, numbers ("1 3 5" or "1,3,5") are those tasks, "Parent:" is every task of that parent.
+    # Returns indexes into $list; for anything else it says what is expected and returns nothing.
     $select = {
         param($verb, $list = $tasks, $listCmd = 't list')
         $list = @($list)
-        if (@($rest -notmatch '^\d+$').Count -eq 0) {
-            $p = @($rest | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
+        if (-not $rest.Count) { return , @(0) }
+        $nums = @($rest | ForEach-Object { "$_" -split '[,\s]+' } | Where-Object { $_ })
+        if (@($nums -notmatch '^\d+$').Count -eq 0) {
+            $p = @($nums | ForEach-Object { [int]$_ - 1 } | Sort-Object -Unique)
             if (@($p | Where-Object { $_ -lt 0 -or $_ -ge $list.Count }).Count) { & $say "No such number. See: $listCmd" Yellow; return }
             return , $p
         }
         $text = $rest -join ' '
-        $p = @(0..($list.Count - 1) | Where-Object { $list[$_].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
-        if (-not $p.Count) { & $say "Nothing matches '$text'." Yellow; return }
-        if ($p.Count -gt 1) {
-            $p | ForEach-Object { & $say "$($_ + 1). $($list[$_])" }
-            & $say "Several match. Use: t $verb <number>" DarkGray
-            return
+        if ($text -match '^(?<p>[^:]+):$') {
+            $name = $Matches.p.Trim()
+            $p = @(for ($i = 0; $i -lt $list.Count; $i++) { if ((& $parentOf $list[$i]) -eq $name) { $i } })
+            if ($p.Count) { return , $p }
+            & $say "No parent '$name'. See: $listCmd" Yellow; return
         }
-        , $p
+        & $say "t $verb takes numbers or a Parent: (find them with: t find <text>)" Yellow
     }
     # Every change to todo.txt goes through here: refuse if the file changed since it was read (a sync or a
     # reminder), append to done.txt, write safely, and keep the previous state for t undo. Returns $true if written.
@@ -324,7 +327,7 @@ function t {
         if ($renamed -and $ages.ContainsKey($renamed[0])) { $ages[$renamed[1]] = @{ Day = $ages[$renamed[0]].Day; Skips = 0 } }
         foreach ($x in $titles) { if (-not $ages.ContainsKey($x)) { $ages[$x] = @{ Day = $day; Skips = 0 } } }
         foreach ($x in @($ages.Keys)) { if ($x -ne "`t" -and $keep -notcontains $x) { $ages.Remove($x) } }
-        if ($bump -and $ages.ContainsKey($bump)) { $ages[$bump].Skips++ }
+        foreach ($x in @($bump)) { if ($x -and $ages.ContainsKey($x)) { $ages[$x].Skips++ } }
         & $writeAge $ages
         $true
     }
@@ -394,10 +397,12 @@ function t {
                 'Verbs'
                 '  t                        show the current task'
                 '  t list   | l             all tasks, numbered'
-                '  t done   | d [n ...]     finish the current task, or chosen ones'
-                '  t skip   | s             move the current task to the bottom'
-                '  t now    | n <task|n>    put a task at the top, or move one there'
-                '  t del    | x [n ...]     remove tasks (logged as dropped)'
+                '  t find   | f <text>      tasks containing the text, with their numbers'
+                '  t done   | d [sel]       finish'
+                '  t skip   | s [sel]       later: a step goes to the end of its parent, anything else to the bottom'
+                '  t now    | n <sel|task>  to the top (a step brings its parent); text is a new task at the top'
+                '  t del    | x [sel]       remove (logged as dropped)'
+                '                           sel: nothing = the current task, numbers (2 5), or a Parent:'
                 '  t edit   | e             open todo.txt in your editor'
                 '  t undo   | u             take back the last change'
                 '  t log    | g [name]      what you finished; how well a routine is kept'
@@ -494,17 +499,15 @@ function t {
         }
         'done' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $pick = @(0)
-            if ($rest.Count) {
-                $pick = & $select 'done'
-                if ($null -eq $pick) { return }
-                # One task is done at once (t undo takes it back); several are shown first
-                if (@($pick).Count -gt 1) {
-                    $pick | ForEach-Object { & $say "  $($tasks[$_])" }
-                    if ((& $ask 'Mark done? [y/N]') -ne 'y') { return }
-                    $doneMsg = "done: $(@($pick).Count) tasks"
-                } else { $doneMsg = "done: $(& $titleOf $tasks[$pick[0]])" }
-            }
+            $pick = & $select 'done'
+            if ($null -eq $pick) { return }
+            $pick = @($pick)
+            # One task is done at once (t undo takes it back); several are shown first
+            if ($pick.Count -gt 1) {
+                $pick | ForEach-Object { & $say "  $($tasks[$_])" }
+                if ((& $ask 'Mark done? [y/N]') -ne 'y') { return }
+                $doneMsg = "done: $($pick.Count) tasks"
+            } elseif ($rest.Count) { $doneMsg = "done: $(& $titleOf $tasks[$pick[0]])" }
             $logLines = @($pick | ForEach-Object { "$day $($tasks[$_])" })
             $parents = @($pick | ForEach-Object { & $parentOf $tasks[$_] } | Where-Object { $_ } | Select-Object -Unique)
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
@@ -512,32 +515,72 @@ function t {
         }
         'del' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
-            $pick = @(0)
-            if ($rest.Count) { $pick = & $select 'del'; if ($null -eq $pick) { return } }
+            $pick = & $select 'del'
+            if ($null -eq $pick) { return }
+            $pick = @($pick)
             $pick | ForEach-Object { & $say "  $($tasks[$_])" }
             if ((& $ask 'Delete? [y/N]') -ne 'y') { return }
             $logLines = @($pick | ForEach-Object { "$day dropped: $($tasks[$_])" })
             $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
         }
         'skip' {
+            # A plain task goes to the bottom of the list. A task of a parent goes to the end of its parent, so
+            # the group stays together; when every task left of a parent is skipped, the group goes to the bottom.
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
             if ($tasks.Count -eq 1) { & $say 'Only one task on your list.' DarkGray; return }
-            $bump = & $titleOf $tasks[0]
-            $tasks = @($tasks | Select-Object -Skip 1) + $tasks[0]
+            $pick = & $select 'skip'
+            if ($null -eq $pick) { return }
+            $sel = @{}; foreach ($i in @($pick)) { $sel[$i] = $true }
+            $stay = @{}   # parent -> how many of its tasks are not skipped
+            for ($i = 0; $i -lt $tasks.Count; $i++) { $p = & $parentOf $tasks[$i]; if ($p -and -not $sel[$i]) { $stay[$p] = 1 + $stay[$p] } }
+            $keep = @(); $late = @{}; $tail = @()
+            for ($i = 0; $i -lt $tasks.Count; $i++) {
+                $p = & $parentOf $tasks[$i]
+                if (-not $sel[$i]) { $keep += $tasks[$i] }
+                elseif ($p -and $stay[$p]) { if (-not $late.ContainsKey($p)) { $late[$p] = @() }; $late[$p] += $tasks[$i] }
+                else { $tail += $tasks[$i] }
+            }
+            $new = @(for ($i = 0; $i -lt $keep.Count; $i++) {
+                $keep[$i]
+                $p = & $parentOf $keep[$i]
+                if ($p -and $late[$p] -and ($i + 1 -eq $keep.Count -or (& $parentOf $keep[$i + 1]) -ne $p)) { $late[$p] }
+            }) + $tail
+            if (($new -join "`n") -ceq ($tasks -join "`n")) { & $say 'Nothing to move.' DarkGray; return }
+            $bump = @(@($pick) | ForEach-Object { & $titleOf $tasks[$_] })
+            $tasks = $new
         }
         'now' {
-            # A number moves that task to the top; text adds a task there (or moves it up if it is already listed)
-            if (-not $rest.Count) { & $say 'Usage: t now <task>, or t now <number> to move a task to the top' Yellow; return }
-            if ($rest.Count -eq 1 -and $rest[0] -match '^\d+$') {
+            # Numbers or "Parent:" move those tasks to the top; a task of a parent brings its whole group, with
+            # that task first. Any other text is a new task at the top (or moves the task with exactly that title).
+            if (-not $rest.Count) { & $say 'Usage: t now <task>, t now <numbers> or t now <Parent>:' Yellow; return }
+            $text = $rest -join ' '
+            if ($text -match '^[\d,\s]+$' -or $text -match '^[^:]+:$') {
                 $pick = & $select 'now'
                 if ($null -eq $pick) { return }
-                $i = $pick[0]; $new = $tasks[$i]
             } else {
-                $new = $rest -join ' '
-                $i = & $findDupe $new
-                if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $new = $tasks[$i] }
+                $i = & $findDupe $text
+                if ($i -ge 0) { & $say 'Already on your list; moved to the top.' DarkGray; $pick = @($i) }
+                else { $tasks = @($text) + $tasks; $pick = @(0) }
             }
-            $tasks = @($new) + @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ($j -ne $i) { $tasks[$j] } })
+            $sel = @{}; foreach ($i in @($pick)) { $sel[$i] = $true }
+            $front = @(); $moved = @{}
+            foreach ($i in @($pick)) {
+                $p = & $parentOf $tasks[$i]
+                if (-not $p) { $front += $tasks[$i]; continue }
+                if ($moved[$p]) { continue }
+                $moved[$p] = $true
+                $all = @(for ($j = 0; $j -lt $tasks.Count; $j++) { if ((& $parentOf $tasks[$j]) -eq $p) { $j } })
+                $front += @($all | Where-Object { $sel[$_] } | ForEach-Object { $tasks[$_] }) + @($all | Where-Object { -not $sel[$_] } | ForEach-Object { $tasks[$_] })
+            }
+            $tasks = $front + @(for ($i = 0; $i -lt $tasks.Count; $i++) { $p = & $parentOf $tasks[$i]; if (-not $sel[$i] -and -not ($p -and $moved[$p])) { $tasks[$i] } })
+        }
+        'find' {
+            if (-not $rest.Count) { & $say 'Usage: t find <text>' Yellow; return }
+            $text = $rest -join ' '
+            $idx = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($tasks[$i].IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $i } })
+            if (-not $idx.Count) { & $say "Nothing matches '$text'." DarkGray; return }
+            & $show $idx
+            return
         }
         'list' {
             if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }

@@ -57,25 +57,26 @@ try {
     Is 'commas file'  ((File todo.txt) -replace '^.*\|', '')   'buy milk, eggs'
 
     # --- routine ---
-    Reset -Routine 'review inbox', 'weekdays 14:00 timesheet'
-    Is 'routine day'  (Run list)                 '1. review inbox|'
+    Reset -Routine 'daily 08:00 review inbox', 'remind weekdays 14:00 timesheet', 'no schedule line'
+    Is 'routine due'  (Run list)                 '1. review inbox|'
     At '2026-11-09 14:30'
     Is 'timed'        (Run list)                 '1. timesheet||2. review inbox|'
-    At '2026-11-10 08:00'
+    At '2026-11-10 07:00'
     Run | Out-Null
     Is 'missed'       (File done.txt)            '2026-11-09 missed: review inbox|2026-11-09 missed: timesheet'
-    Is 'fresh copy'   (File todo.txt)            'review inbox'
-    Is 'routine list' (Run routine)              '1. review inbox|  every day, in the morning|2. timesheet|  weekdays at 14:00'
-    Is 'routine dupe' (Run routine Review Inbox) '  already in your routine: Review Inbox'
+    Is 'cleared'      (File todo.txt)            ''
+    Is 'routine list' (Run routine)              '1. review inbox|  every day at 08:00|2. timesheet|  weekdays at 14:00, reminder|3. no schedule line|  ? needs days and a time, e.g. weekdays 09:00'
+    Is 'routine dupe' (Run daily 9am Review Inbox) 'already in your routine: Review Inbox.'
+    Is 'invalid idle' (File todo.txt)            ''
 
     # --- step 2: reliability ---
-    Reset -Routine 'review inbox'
+    Reset -Routine 'daily 08:00 review inbox'
     Run | Out-Null
     [IO.File]::WriteAllLines("$dir\todo.txt", [string[]]'review inbox // check finance')
     At '2026-11-10 09:00'; Run | Out-Null
     Is 'note: one copy'   (File todo.txt)      'review inbox'
     Is 'note: missed'     (File done.txt)      '2026-11-09 missed: review inbox'
-    Reset -Routine 'review inbox'
+    Reset -Routine 'daily 08:00 review inbox'
     Run | Out-Null
     [IO.File]::WriteAllLines("$dir\todo.txt", [string[]]('review inbox:', '  a', '  b'))
     At '2026-11-10 09:00'; Run | Out-Null
@@ -117,13 +118,6 @@ try {
     Reset
     Is 'skip empty'     (Run skip)                   'Nothing to do. Add one: t <task>'
     Is 'done empty'     (Run done)                   'Nothing to do. Add one: t <task>'
-    Is 'routine add x'  (Run routine add tests)      '  added to your routine: add tests (every day, in the morning)'
-    Is 'routine edit x' (Run routine edit slides)    '  added to your routine: edit slides (every day, in the morning)'
-    Is 'routine list x' (Run routine list of chores) '  added to your routine: list of chores (every day, in the morning)'
-    Answers 'weekdays 14:00 timesheet', ''
-    Is 'routine prompt' (Run routine add)            '  added to your routine: timesheet (weekdays at 14:00)'
-    Answers 'y'
-    Is 'routine del'    (Run routine del 1)          '  add tests  every day, in the morning|  removed 1 from your routine.'
     Is 'help'           ((Run help).Split('|')[0])   'Capture'
 
     # --- step 4: steps ---
@@ -153,49 +147,13 @@ try {
     Is 'short h'        ((Run h).Split('|')[0])    'Capture'
     Is 'old verb parks' (Run note it down)         'parked.'
     Is 'skip text'      (Run skip this)            't skip takes numbers or a Parent: (find them with: t find <text>)'
-    Reset -Routine 'weekdays 07:00 morning: stretch / shower', 'weekdays plan: review / pick' -Now '2026-11-09 06:00'
-    Is 'routine steps'  (File todo.txt)                       ''
-    Run | Out-Null
-    Is 'untimed steps'  (File todo.txt)                       'plan:|  review|  pick'
-    At '2026-11-09 07:30'; Run | Out-Null
-    Is 'timed steps'    (File todo.txt)                       'morning:|  stretch|  shower|plan:|  review|  pick'
-    Run done | Out-Null
-    At '2026-11-09 08:00'; Run | Out-Null
-    Is 'no re-add'      (File todo.txt)                       'morning:|  shower|plan:|  review|  pick'
-    At '2026-11-10 06:00'; Run | Out-Null
-    Is 'step missed'    (File done.txt)                       '2026-11-09 morning: stretch|2026-11-09 missed: plan: review|2026-11-09 missed: plan: pick|2026-11-09 missed: morning: shower'
-    Is 'steps fresh'    (File todo.txt)                       'plan:|  review|  pick'
-    Is 'routine shows'  (Run routine)                         '1. morning: stretch / shower|  weekdays at 07:00|2. plan: review / pick|  weekdays, in the morning'
-    Is 'routine key'    (Run routine morning: other / thing)  '  already in your routine: morning'
 
-    # --- step 5: routine parsing ---
-    Reset
-    Is 'full day'     (Run routine Monday 2pm standup)       '  added to your routine: standup (mon at 14:00)'
-    Is 'range'        (Run routine mon-fri 9.30 mail)        '  added to your routine: mail (weekdays at 09:30)'
-    Is 'wrap range'   (Run routine fri-mon walk)             '  added to your routine: walk (sun,mon,fri,sat, in the morning)'
-    Is 'everyday'     (Run routine everyday 12am backup)     '  added to your routine: backup (every day at 00:00)'
-    Is 'typo day'     (Run routine weekdys 14:00 x)          "  'weekdys' looks like 'weekdays'|  Not added. To add it as written, type it at the prompt: t routine add"
-    Is 'typo list'    (Run routine mon,thr 9:00 x)           "  'mon,thr' looks like a list of days; use forms such as mon,thu or mon-fri|  Not added. To add it as written, type it at the prompt: t routine add"
-    Is 'bad time'     (Run routine 25:00 x)                  "  '25:00' looks like a time; use forms such as 14:00 or 2pm|  Not added. To add it as written, type it at the prompt: t routine add"
-    Is 'bad time 2'   (Run routine weekdays 13pm x)          "  '13pm' looks like a time; use forms such as 14:00 or 2pm|  Not added. To add it as written, type it at the prompt: t routine add"
-    Is 'not a time'   (Run routine 10 pushups)               '  added to your routine: 10 pushups (every day, in the morning)'
-    Is 'not a day'    (Run routine weekly report)            '  added to your routine: weekly report (every day, in the morning)'
-    Is 'the'          (Run routine the review)               '  added to your routine: the review (every day, in the morning)'
-    Is 'quiet'        (Run routine weekdays 14:00 quiet ts)  '  added to your routine: ts (weekdays at 14:00, quiet)'
-    Answers '25:00 odd name', 'y', ''
-    Is 'as written'   (Run routine add)                      "  '25:00' looks like a time; use forms such as 14:00 or 2pm|  added to your routine: 25:00 odd name (every day, in the morning)"
-    Is 'list warns'   ((Run routine).Split('|')[-1])         "  ? '25:00' looks like a time; use forms such as 14:00 or 2pm"
-    Reset -Routine '# keep me', '  weekdays   14:00   spaced  '
-    Run routine stretch | Out-Null
-    Is 'routine tidy' (File routine.txt)                     '# keep me|weekdays 14:00 spaced|stretch'
+    # --- tidying ---
     Reset '  spaced    out  ', '', 'x'
     Run y | Out-Null
     Is 'cleaned'      (File todo.txt)                        'spaced out|x|y'
     Reset 'a', 'b // n', 'a'
     Is 'same as'      (Run list)                             '1. a||2. b|  // n|3. a||  (same as #1)'
-    Reset -Routine 'weekdays 14:00 quiet timesheet', 'weekdays 14:00 loud one' -Now '2026-11-09 14:30'
-    Run | Out-Null
-    Is 'quiet on top' (File todo.txt)                        'timesheet|loud one'
 
     # --- step 6: ages and nudges ---
     Reset 'a', 'b'
@@ -225,11 +183,11 @@ try {
     Is 'log unknown'   (Run log hours)   "parked. (no history for 'hours')"
     Is 'log parked'    (File todo.txt)   'log hours'
     Is 'log week'      (Run log)         'this week: 0 done, 1 dropped, 0 missed'
-    Reset -Routine 'weekdays 14:00 timesheet', 'weekdays 07:00 morning: stretch / shower', 'weekends gym'
+    Reset -Routine 'weekdays 14:00 timesheet', 'weekdays 07:00 morning:', '  stretch', '  shower', 'weekends 10:00 gym', 'tomorrow 10:00 one off'
     [IO.File]::WriteAllLines("$dir\done.txt", [string[]]('2026-11-05 timesheet', '2026-11-06 missed: timesheet', '2026-11-06 morning: stretch', '2026-11-06 missed: morning: shower', '2026-11-05 morning: stretch', '2026-11-05 morning: shower'))
     Is 'log routine'   (Run log timesheet)   'timesheet  weekdays at 14:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
     Is 'log steps'     (Run log morning)     'morning  weekdays at 07:00|last 4 weeks: 1 of 2 days (50%), streak 0|x .'
-    Is 'log empty'     (Run log gym)         'gym  weekends, in the morning|nothing logged in the last 4 weeks.'
+    Is 'log empty'     (Run log gym)         'gym  weekends at 10:00|nothing logged in the last 4 weeks.'
     Is 'log overview'  (Run log)             'this week: 0 done, 0 dropped, 0 missed|routine, last 4 weeks:|  timesheet  1 of 2 days  50%  streak 0|  morning    1 of 2 days  50%  streak 0|  gym        nothing logged yet'
     # --- parent blocks ---
     Reset '  orphan', 'Report:', "`tDraft // due monday", '- Review', '', '    Send', 'call dentist', 'Empty:', 'last'
@@ -318,6 +276,102 @@ try {
         Is 'routine undone' (File routine.txt)   ''
         $env:EDITOR = $null
     }
+    # --- routine: schedule prefix ---
+    Reset -Now '2026-11-09 05:00'
+    Is 'sched new'    (Run daily 07:00 Stretch)                'routine: Stretch  (every day at 07:00)'
+    Is 'sched file'   (File routine.txt)                       'daily 07:00 Stretch'
+    Is 'not listed'   (File todo.txt)                          ''
+    Is 'no time'      (Run daily review of sales)              'parked.'
+    Is 'sched quoted' (Run 'daily 07:00 x')                    'parked.'
+    Is 'remind'       (Run remind mon, thu 5pm call supplier)  'routine: call supplier  (mon,thu at 17:00, reminder)'
+    Is 'full day'     (Run Monday 2pm standup)                 'routine: standup  (mon at 14:00)'
+    Is 'range'        (Run mon-fri 9.30 mail)                  'routine: mail  (weekdays at 09:30)'
+    Is 'wrap range'   (Run fri-mon 8am walk)                   'routine: walk  (sun,mon,fri,sat at 08:00)'
+    Is 'everyday'     (Run everyday 11pm backup)               'routine: backup  (every day at 23:00)'
+    Is 'typo hint'    (Run weekdys 14:00 x)                    "parked.|'weekdys' looks like 'weekdays'. For a routine entry: weekdays 09:00 <task>  (t undo)"
+    Is 'not a time'   (Run 10 pushups daily)                   'parked.'
+    Is 'stored'       (File routine.txt)                       'daily 07:00 Stretch|remind mon,thu 17:00 call supplier|monday 14:00 standup|mon-fri 09:30 mail|fri-mon 08:00 walk|everyday 23:00 backup'
+    Answers 'weekdays 9am'
+    Is 'ask when'     (Run remind Report: Send)                'routine: Report: Send  (weekdays at 09:00, reminder)'
+    Answers 'sometime'
+    Is 'bad when'     (Run remind call bob)                    'A routine entry needs days and a time, e.g. weekdays 09:00 or tomorrow 9am. Nothing was saved.'
+    Answers 'vitamins'
+    Is 'ask task'     (Run remind daily 08:00)                 'routine: vitamins  (every day at 08:00, reminder)'
+    Answers 'stretch', 'plan the day', ''
+    Is 'block new'    (Run remind weekdays 07:00 Morning:)     'routine: Morning:  (weekdays at 07:00, reminder)'
+    Is 'block dupe'   (Run daily 06:00 morning:)               'already in your routine: morning. To add a step: t r morning: <step>'
+    Is 'grow'         (Run r Morning: floss)                   'added to Morning: floss'
+    Answers 'tea', 'floss', ''
+    Is 'grow bulk'    (Run r morning:)                         'added to Morning: tea'
+    Is 'grow none'    (Run r Nope: x)                          "No routine called 'Nope'. See: t r"
+    Is 'grow single'  (Run r vitamins: x)                      'vitamins has no steps; edit it with: t r e'
+    Is 'block listed' (((Run r).Split('|') | Select-Object -Last 6) -join '|')   '9. Morning:|  weekdays at 07:00, reminder|     stretch|     plan the day|     floss|     tea'
+    Is 'block stored' (((File routine.txt).Split('|') | Select-Object -Last 5) -join '|')   'remind weekdays 07:00 Morning:|  stretch|  plan the day|  floss|  tea'
+    Is 'r usage'      (Run r what now)                         'Usage: t r | t r e | t r x <numbers> | t r <Parent>: [<step>] | t r <numbers|Parent:> <when> <time>'
+    Is 'r del text'   (Run r x stretch)                        'Usage: t r x <numbers>  (numbers from t r)'
+    Answers 'y'
+    Is 'r del'        (Run r x 1, 9)                           '  Stretch  every day at 07:00|  Morning:  weekdays at 07:00, reminder|  removed 2 from your routine.'
+    Is 'r del file'   (File routine.txt)                       'remind mon,thu 17:00 call supplier|monday 14:00 standup|mon-fri 09:30 mail|fri-mon 08:00 walk|everyday 23:00 backup|remind weekdays 09:00 Report: Send|remind daily 08:00 vitamins'
+    Is 'r undo'       (Run u)                                  "undone: routine del|$arrow daily review of sales"
+    Is 'r undone'     ((File routine.txt).Split('|')[0])       'daily 07:00 Stretch'
+
+    # --- routine: running ---
+    Reset -Routine '# mine', 'weekdays  2pm   plain', 'remind weekdays 14:00 loud', 'weekdays 07:00 Morning:', '  stretch', "`tshower" -Now '2026-11-09 06:00'
+    Run | Out-Null
+    Is 'not yet'      (File todo.txt)       ''
+    At '2026-11-09 07:30'; Run | Out-Null
+    Is 'block due'    (File todo.txt)       'Morning:|  stretch|  shower'
+    Run done | Out-Null
+    At '2026-11-09 08:00'; Run | Out-Null
+    Is 'no re-add'    (File todo.txt)       'Morning:|  shower'
+    At '2026-11-09 14:30'
+    Is 'remind names' (Run --remind)        'loud'
+    Is 'timed on top' (File todo.txt)       'plain|loud|Morning:|  shower'
+    Is 'read only'    (File routine.txt)    "# mine|weekdays  2pm   plain|remind weekdays 14:00 loud|weekdays 07:00 Morning:|  stretch|`tshower"
+    At '2026-11-10 06:00'; Run | Out-Null
+    Is 'step missed'  (File done.txt)       '2026-11-09 Morning: stretch|2026-11-09 missed: Morning: shower|2026-11-09 missed: plain|2026-11-09 missed: loud'
+    Is 'new day'      (File todo.txt)       ''
+    Run daily 23:00 late | Out-Null
+    Is 'routine tidy' (File routine.txt)    '# mine|weekdays 14:00 plain|remind weekdays 14:00 loud|weekdays 07:00 Morning:|  stretch|  shower|daily 23:00 late'
+
+    # --- routine: once ---
+    Reset -Now '2026-11-09 18:00'
+    Is 'once today'   (Run remind today 19:00 email XYZ)   'routine: email XYZ  (once, mon 9 nov at 19:00, reminder)'
+    Is 'once stored'  (File routine.txt)                   'remind 2026-11-09 19:00 email XYZ'
+    Is 'once past'    (Run today 5pm too late)             'That time has passed.'
+    Is 'tomorrow'     (Run tomorrow 9am call bank)         'routine: call bank  (once, tue 10 nov at 09:00)'
+    Is 'next day'     (Run remind next mon 10:00 review)   'routine: review  (once, mon 16 nov at 10:00, reminder)'
+    Is 'a date'       (Run 2026-11-20 10:00 renew)         'routine: renew  (once, fri 20 nov at 10:00)'
+    Is 'repeats'      (Run fri 17:00 weekly)               'routine: weekly  (fri at 17:00)'
+    At '2026-11-09 19:05'
+    Is 'once fires'   (Run --remind)                       'email XYZ'
+    Is 'once listed'  (File todo.txt)                      'email XYZ'
+    Is 'once removed' ((File routine.txt).Split('|')[0])   '2026-11-10 09:00 call bank'
+    At '2026-11-11 08:00'; Run | Out-Null
+    Is 'once stays'   (File todo.txt)                      'call bank|email XYZ'
+    Is 'never missed' (File done.txt)                      ''
+    Reset -Routine 'tomorrow 9am by hand' -Now '2026-11-09 18:00'
+    (Get-Item "$dir\routine.txt").LastWriteTime = [datetime]'2026-11-09 12:00'
+    Is 'hand written' (Run r)                              '1. by hand|  once, tue 10 nov at 09:00'
+    Run daily 07:00 other | Out-Null
+    Is 'hand stored'  (File routine.txt)                   '2026-11-10 09:00 by hand|daily 07:00 other'
+
+    # --- routine: moving tasks in ---
+    Reset 'p', 'Report:', '  Draft // n', '  Review', '  Send', 'q' -Now '2026-11-09 05:00'
+    Is 'move one'     (Run r 1 weekdays 09:00)             "moved to your routine: p  (weekdays at 09:00)|$arrow Report: Draft|  (3 steps left)|  n"
+    Is 'move files'   ((File todo.txt) + ' / ' + (File routine.txt))   'Report:|  Draft // n|  Review|  Send|q / weekdays 09:00 p'
+    Is 'move undo'    (Run undo)                           "undone: routine|$arrow p"
+    Is 'undo both'    ((File todo.txt) + ' / ' + (File routine.txt))   'p|Report:|  Draft // n|  Review|  Send|q / '
+    Run r 2 3 remind daily 08:00 | Out-Null
+    Is 'move steps'   ((File todo.txt) + ' / ' + (File routine.txt))   'p|Report:|  Send|q / remind daily 08:00 Report:|  Draft // n|  Review'
+    Is 'move dupe'    (Run r Report: mon 10:00)            'already in your routine: Report. Nothing was changed.'
+    Is 'move usage'   (Run r 1 weekdays)                   'Usage: t r | t r e | t r x <numbers> | t r <Parent>: [<step>] | t r <numbers|Parent:> <when> <time>'
+    Reset 'p', 'Report:', '  Draft', '  Review' -Now '2026-11-09 05:00'
+    Run r report: remind mon 10:00 | Out-Null
+    Is 'move parent'  ((File todo.txt) + ' / ' + (File routine.txt))   'p / remind mon 10:00 Report:|  Draft|  Review'
+    Is 'move once'    (Run r 1 tomorrow 9am)               'moved to your routine: p  (once, tue 10 nov at 09:00)|Nothing to do. Add one: t <task>'
+    At '2026-11-10 09:30'; Run | Out-Null
+    Is 'comes back'   (File todo.txt)                      'p'
 } catch {
     # an error stops the run: without this the cases after it would be skipped silently
     $fail++; Write-Host "ERROR after $count cases: $_" -ForegroundColor Red

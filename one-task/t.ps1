@@ -1,9 +1,10 @@
 # t - one task at a time. Works in Windows PowerShell 5.1 and PowerShell 7.
 # Usage: t | t <task> [// note] | t <Parent>: [<task>] | t "<text as typed>"
+#        t [remind] <when> <time> [<Parent>:] [<task>]   a routine entry; when: daily, weekdays, mon,thu ... (repeats)
+#                                                        or today, tomorrow, next fri, 2026-11-20 (once)
 #        t list | t find <text> | t done [sel] | t del [sel] | t skip [sel] | t now <task|sel>   (sel: numbers or Parent:)
-#        | t log [name] | t undo | t merge | t help
-#        t edit | t edit [n] // <note> | t edit <n> <new text>
-#        t routine [list] | t routine <line> | t routine add | t routine edit | t routine del <n|text>
+#        t edit | t edit [n] // <note> | t edit <n> <new text> | t undo | t log [name] | t merge | t help
+#        t routine | t routine edit | t routine del <n ...> | t routine <Parent>: [<step>] | t routine <sel> <when> <time>
 #        t setup | t uninstall   (t --remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -30,12 +31,13 @@ function t {
         $w = if ($short.ContainsKey($a[0])) { $short[$a[0]] } else { $a[0].ToLower() }
         if (-not $literal -and $w -in $words) { $cmd = $w; $rest = @($a | Select-Object -Skip 1) } else { $cmd = 'park'; $rest = $a }
     }
-    # t routine [list|add|edit|del]: list, add and edit only count when alone, so
-    # "t routine add tests" is the routine line "add tests"; anything else after "routine" is a line to add
+    # t routine: alone lists; e|edit opens the file; x|del removes; anything else adds steps or moves tasks in
     if ($cmd -eq 'routine') {
-        $sub = if ($rest.Count) { $rest[0] } else { 'list' }
-        if ($sub -eq 'del' -or ($sub -in 'list', 'add', 'edit' -and $rest.Count -le 1)) { $rest = @($rest | Select-Object -Skip 1) } else { $sub = 'add' }
-        $cmd = "routine $sub"
+        $sub = if ($rest.Count) { "$($rest[0])".ToLower() } else { '' }
+        if (-not $rest.Count) { $cmd = 'routine list' }
+        elseif ($sub -in 'e', 'edit') { $cmd = if ($rest.Count -eq 1) { 'routine edit' } else { 'routine usage' }; $rest = @() }
+        elseif ($sub -in 'x', 'del') { $cmd = 'routine del'; $rest = @($rest | Select-Object -Skip 1) }
+        else { $cmd = 'routine change' }
     }
 
     $dir   = $OneTaskDir
@@ -92,17 +94,6 @@ function t {
         }
         foreach ($o in $order) { if ($o.StartsWith("`t")) { $kids[$o.Substring(1)] } else { $o } }
     }
-    # "parent: a / b // note" -> "parent: a // note", "parent: b"; anything without both "parent: " and " / " -> itself.
-    # Call it as @(& $expand $text).
-    $expand = {
-        param($s)
-        $p = "$s" -split ' // ', 2
-        if ($p[0] -notmatch '^(?<parent>[^:/]+): (?<steps>.+\s/\s.+)$') { return "$s" }
-        $parent = $Matches.parent.Trim()
-        $out = @($Matches.steps -split '\s+/\s+' | Where-Object { $_.Trim() } | ForEach-Object { "${parent}: $($_.Trim())" })
-        if ($p.Count -gt 1) { $out[0] += " // $($p[1])" }
-        $out
-    }
     # A task belongs to a routine entry when its title is the entry, or a step of it ("entry: step")
     $isOf = { param($line, $names) $x = & $titleOf $line; foreach ($n in $names) { if ($x -eq $n -or $x.StartsWith("${n}: ", [StringComparison]::OrdinalIgnoreCase)) { return $true } }; $false }
     $say = { param($text, $color, [switch]$NoNewline) if ($color -and -not $env:NO_COLOR) { Write-Host $text -ForegroundColor $color -NoNewline:$NoNewline } else { Write-Host $text -NoNewline:$NoNewline } }
@@ -110,7 +101,6 @@ function t {
     if ($rest.Count -and $cmd -in 'list', 'undo', 'help', 'merge', 'setup', 'uninstall', '--remind') {
         & $say "t $cmd takes nothing after it. To park that text, quote it: t `"$($a -join ' ')`"" Yellow; return
     }
-    if ($cmd -eq 'remind') { & $say "t $cmd is not ready yet." Yellow; return }
     if ($cmd -notin 'setup', 'uninstall') {
         if (-not $dir) { & $say 'No task folder set. Run: t setup' Yellow; return }
         if (-not (Test-Path $TODO)) { New-Item $dir -ItemType Directory -Force | Out-Null; New-Item $TODO -ItemType File | Out-Null }
@@ -145,19 +135,35 @@ function t {
         $dayOf = { param($s) $s = "$s".ToLower(); if ($s.Length -eq 3 -or $full -contains $s) { [array]::IndexOf($d3, $s.Substring(0, 3)) } else { -1 } }
         # "mon, thu 9:00 x" -> "mon,thu 9:00 x": PowerShell splits a comma list typed on the command line
         $glue = { param($l) [regex]::Replace("$l".Trim(), '(?i)^((sun|mon|tue|wed|thu|fri|sat)[a-z]*\s*,\s*)+', { param($m) $m.Value -replace '\s', '' }) }
-        # Reads one routine line, "[days] [time] [quiet] task"; returns nothing for blank lines and # comments.
-        # Days: daily, everyday, weekdays, weekends, mon,thu, monday, mon-fri. Time: 14:00, 14.00, 2pm, 2:30pm.
-        # It runs on every t, so it stays cheap; mistyped days and times are spotted by $warnOf, on demand.
+        # Reads one routine line, "[remind] <when> <time> task"; returns nothing for blank lines and # comments.
+        # When, repeating: daily, everyday, weekdays, weekends, mon,thu, monday, mon-fri. When, once: today,
+        # tomorrow, next fri (counted from $base), 2026-11-20. Time: 14:00, 14.00, 2pm, 2:30pm.
+        # An entry is Valid only with both a when and a time. It runs on every t, so it stays cheap;
+        # mistyped days and times are spotted by $warnOf, on demand.
         $parseLine = {
-            param($l, $n)
-            $l = "$l".Trim()
-            if (-not $l -or $l.StartsWith('#')) { return }
+            param($l, $n, $base)
+            $raw = ("$l" -replace '\s+', ' ').Trim()
+            if (-not $raw -or $raw.StartsWith('#')) { return }
+            $l = $raw
+            $rem = $l -match '^remind (.+)$'
+            if ($rem) { $l = $Matches[1] }
             $l = & $glue $l
             $w = @($l -split '\s+')
-            $days = 0..6; $at = $null; $quiet = $false; $set = $null
+            $days = @(); $at = $null; $set = $null; $on = $null; $tok = ''
             if ($w.Count -gt 1) {
                 $f = $w[0].ToLower()
-                if ($f -in 'daily', 'everyday') { $set = 0..6 }
+                if ($f -eq 'today') { $on = $base }
+                elseif ($f -eq 'tomorrow') { $on = $base.AddDays(1) }
+                elseif ($f -eq 'next' -and $w.Count -gt 2 -and (& $dayOf $w[1]) -ge 0) {
+                    # the first such day after $base: a week later when $base is that day
+                    $on = $base.AddDays(((& $dayOf $w[1]) - [int]$base.DayOfWeek + 6) % 7 + 1)
+                    $w = @($w | Select-Object -Skip 1)
+                }
+                elseif ($f -match '^\d{4}-\d{2}-\d{2}$') {
+                    $x = [datetime]::MinValue
+                    if ([datetime]::TryParseExact($f, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, 'None', [ref]$x)) { $on = $x }
+                }
+                elseif ($f -in 'daily', 'everyday') { $set = 0..6 }
                 elseif ($f -in 'weekday', 'weekdays') { $set = 1..5 }
                 elseif ($f -in 'weekend', 'weekends') { $set = 0, 6 }
                 else {
@@ -169,7 +175,8 @@ function t {
                     })
                     if ($all -notcontains -1) { $set = $all }
                 }
-                if ($null -ne $set) { $days = @($set | Sort-Object -Unique); $w = @($w | Select-Object -Skip 1) }
+                if ($on) { $tok = $on.ToString('yyyy-MM-dd'); $w = @($w | Select-Object -Skip 1) }
+                elseif ($null -ne $set) { $days = @($set | Sort-Object -Unique); $tok = $f; $w = @($w | Select-Object -Skip 1) }
             }
             if ($w.Count -gt 1 -and $w[0] -match '^(?<h>\d{1,2})(?:[:.](?<m>\d{2}))?(?<ap>am|pm)?$' -and ($Matches.m -or $Matches.ap)) {
                 $h = [int]$Matches.h; $m = [int]$Matches.m; $ap = $Matches.ap
@@ -180,21 +187,70 @@ function t {
                     $w = @($w | Select-Object -Skip 1)
                 }
             }
-            # "quiet" after a time: the task still moves to the top then, without a notification
-            if ($at -and $w.Count -gt 1 -and $w[0] -eq 'quiet') { $quiet = $true; $w = @($w | Select-Object -Skip 1) }
-            # Names are the task lines the entry puts on the list (several when it has steps), Titles the same
-            # without notes, Key the name it is known by (the parent when it has steps)
-            $text  = $w -join ' '
-            $steps = @(& $expand $text)
-            $key   = if ($steps.Count -gt 1) { ($steps[0] -split ': ', 2)[0] } else { & $titleOf $text }
-            [pscustomobject]@{ Days = @($days); Prefixed = $null -ne $set; At = $at; Quiet = $quiet; Text = $text; Names = $steps; Titles = @($steps | ForEach-Object { & $titleOf $_ }); Key = $key; Line = $n }
+            # Sched is the schedule as it is stored: "[remind ]<when> HH:mm", a date for a one-time entry.
+            # Names are the task lines the entry puts on the list (its steps when it is a "Parent:" block),
+            # Titles the same without notes, Key the name it is known by; the reader fills those in.
+            $valid = [bool]$tok -and $null -ne $at
+            $sched = if ($valid) { "$(if ($rem) { 'remind ' })$tok $($at.ToString('hh\:mm'))" } else { '' }
+            [pscustomobject]@{ Days = @($days); On = $on; Prefixed = [bool]$tok; At = $at; Remind = $rem; Text = $w -join ' '; Raw = $raw; Sched = $sched; Valid = $valid; Head = $false; Names = @(); Titles = @(); Key = ''; Line = $n; Last = $n }
         }
-        # Routine lines as written to routine.txt: comments kept, spaces tidied
-        $tidy = { param($l) if ("$l".TrimStart().StartsWith('#')) { "$l".TrimEnd() } else { ("$l" -replace '\s+', ' ').Trim() } }
-        $items = @()
+        # routine.txt -> entries. A line ending in ":" starts a block; the indented lines under it are its steps.
+        $readRoutine = {
+            param($lines, $base)
+            $n = 0; $cur = $null
+            $all = @(foreach ($l in $lines) {
+                $n++
+                $text = ("$l" -replace '\s+', ' ').Trim()
+                if (-not $text -or $text.StartsWith('#')) { continue }
+                if ("$l" -match '^(\s+|-\s+)' -and $cur -and $cur.Head) {
+                    $x = "$($cur.Key): $($text -replace '^- ', '')"
+                    $cur.Names += $x; $cur.Titles += (& $titleOf $x); $cur.Last = $n
+                    continue
+                }
+                $cur = & $parseLine $l $n $base
+                if ($cur.Text -match '^(?<h>[^:]+):$') { $cur.Head = $true; $cur.Key = $Matches.h.Trim() }
+                else { $cur.Names = @($cur.Text); $cur.Titles = @(& $titleOf $cur.Text); $cur.Key = $cur.Titles[0] }
+                $cur
+            })
+            foreach ($e in $all) { if ($e.Head -and -not $e.Names.Count) { $e.Valid = $false } }   # a block needs steps
+            $all
+        }
+        # Words typed after t -> the entry they schedule, or nothing when a when and a time are not both there
+        $schedOf = {
+            param($w)
+            $e = & $parseLine ((@($w) + '_') -join ' ') 0 $now.Date   # the placeholder lets a schedule without a task parse
+            if ($e -and $e.Valid) { $e.Text = ($e.Text -replace '\s*_$', ''); $e }
+        }
+        # Routine lines as t writes them: comments kept, steps indented by two spaces, a valid schedule in its
+        # stored form (so "2pm" becomes "14:00" and "tomorrow" a date)
+        $canon = {
+            param($lines, $base)
+            foreach ($l in $lines) {
+                if ("$l".TrimStart().StartsWith('#')) { "$l".TrimEnd() }
+                elseif ("$l" -match '^(\s+|-\s+)\S') { "  $((("$l" -replace '\s+', ' ').Trim()) -replace '^- ', '')" }
+                else { $e = & $parseLine $l 0 $base; if ($e -and $e.Valid) { "$($e.Sched) $($e.Text)" } else { ("$l" -replace '\s+', ' ').Trim() } }
+            }
+        }
+        # Every change t makes to routine.txt: written safely, and kept for t undo when $what names the command
+        $writeRoutine = {
+            param($lines, $what)
+            $old = @(if (Test-Path $ROUTINE) { [IO.File]::ReadAllLines($ROUTINE) })
+            $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
+            & $save $ROUTINE @(& $canon $lines $rbase)
+            if ($what) { & $stash 'routine' $len $what @() $old }
+        }
+        # A schedule at the start of what was typed makes it a routine entry; t remind always does
+        $sched = $null
+        if ($cmd -eq 'remind') { $sched = & $schedOf (@('remind') + $rest); $cmd = 'routine new' }
+        elseif ($cmd -eq 'park' -and -not $literal) { $sched = & $schedOf $rest; if ($sched) { $cmd = 'routine new' } }
+
+        $items = @(); $rlines = @()
+        $rbase = $now.Date   # "tomorrow" in a hand-edited line counts from the day the file was saved
         if (Test-Path $ROUTINE) {
-            $n = 0
-            $items = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; & $parseLine $l $n })
+            $rbase  = (Get-Item $ROUTINE).LastWriteTime.Date
+            $rlines = @([IO.File]::ReadAllLines($ROUTINE))
+            $items  = @(& $readRoutine $rlines $rbase)
+            $live   = @($items | Where-Object { $_.Valid -and -not $_.On })   # repeating entries
             # @() around if: an if expression unrolls a one-element array into a bare string
             $memo  = @(if (Test-Path $LAST) { [IO.File]::ReadAllLines($LAST) })
             $prevDay = if ($memo.Count) { $memo[0] } else { '' }
@@ -207,31 +263,46 @@ function t {
                     $prev = [datetime]::ParseExact($prevDay, 'yyyy-MM-dd', $null)
                     foreach ($x in $added) { if (& $onList $x) { $log += "$prevDay missed: $x" } }
                     $tasks = @($tasks | Where-Object { -not (& $isOf $_ $added) })
-                    foreach ($r in $items) { if ($r.At -and $r.Days -contains [int]$prev.DayOfWeek) { foreach ($x in $r.Titles) { if ($added -notcontains $x) { $log += "$prevDay missed: $x" } } } }
+                    foreach ($r in $live) { if ($r.Days -contains [int]$prev.DayOfWeek) { foreach ($x in $r.Titles) { if ($added -notcontains $x) { $log += "$prevDay missed: $x" } } } }
                     # Days without any t run (PC off), at most the last 31
                     $from = $prev.AddDays(1)
                     if ($from -lt $now.Date.AddDays(-31)) { $from = $now.Date.AddDays(-31) }
                     for ($x = $from; $x -lt $now.Date; $x = $x.AddDays(1)) {
-                        foreach ($r in $items) { if ($r.Days -contains [int]$x.DayOfWeek) { foreach ($y in $r.Titles) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $y" } } }
+                        foreach ($r in $live) { if ($r.Days -contains [int]$x.DayOfWeek) { foreach ($y in $r.Titles) { $log += "$($x.ToString('yyyy-MM-dd')) missed: $y" } } }
                     }
                 }
-                $new = @(foreach ($r in $items) { if (-not $r.At -and $r.Days -contains [int]$now.DayOfWeek) { foreach ($x in $r.Names) { if (-not (& $onList (& $titleOf $x))) { $x } } } })
-                $added = @($new | ForEach-Object { & $titleOf $_ })
-                $tasks = $new + $tasks
+                $added = @()
             }
-            # Timed entries that are due and not yet added today; $dueShown names them for the reminder
-            $due = @(foreach ($r in @($items | Where-Object { $_.At } | Sort-Object At, Line)) {
+            # Repeating entries that are due and not yet added today; $dueShown names the ones to remind of
+            $due = @(foreach ($r in @($live | Sort-Object At, Line)) {
                 if ($r.At -le $now.TimeOfDay -and $r.Days -contains [int]$now.DayOfWeek) {
                     $new = @($r.Names | Where-Object { $x = & $titleOf $_; $added -notcontains $x -and -not (& $onList $x) })
-                    if ($new.Count) { if (-not $r.Quiet) { $dueShown += $r.Key }; $new }
+                    if ($new.Count) { if ($r.Remind) { $dueShown += $r.Key }; $new }
                 }
             })
-            if ($newDay -or $due.Count) {
-                $tasks = @(& $group ($due + $tasks))
+            # One-time entries whose time has come: they become ordinary tasks (never logged as missed) and
+            # leave routine.txt
+            $fired = @($items | Where-Object { $_.Valid -and $_.On -and $_.On + $_.At -le $now } | Sort-Object { $_.On + $_.At }, Line)
+            $dueOnce = @(foreach ($r in $fired) {
+                $new = @($r.Names | Where-Object { -not (& $onList (& $titleOf $_)) })
+                if ($new.Count) { if ($r.Remind) { $dueShown += $r.Key }; $new }
+            })
+            if ($newDay -or $due.Count -or $fired.Count) {
+                $tasks = @(& $group ($dueOnce + $due + $tasks))
                 $added += @($due | ForEach-Object { & $titleOf $_ })
                 if ($log.Count) { [IO.File]::AppendAllText($DONE, ($log -join "`r`n") + "`r`n") }
-                & $save $TODO @(& $toFile $tasks)
+                # todo.txt is written only when it changes, so t undo still sees its own last write
+                if (($tasks -join "`n") -cne ($before -join "`n")) { & $save $TODO @(& $toFile $tasks) }
                 & $save $LAST (@($day) + $added)
+            }
+            if ($fired.Count) {
+                $gone = @($fired | ForEach-Object { $_.Line..$_.Last })
+                $n = 0
+                $rlines = @(foreach ($l in $rlines) { $n++; if ($n -notin $gone) { $l } })
+                & $save $ROUTINE @(& $canon $rlines $rbase)
+                $rbase = $now.Date
+                $items = @(& $readRoutine $rlines $rbase)
+                $live  = @($items | Where-Object { $_.Valid -and -not $_.On })
             }
 
             # Reminders: one scheduled task, re-armed for the next timed routine task after every
@@ -241,8 +312,10 @@ function t {
                 $next = $null
                 for ($x = 0; $x -le 7 -and -not $next; $x++) {
                     $d = $now.Date.AddDays($x)
-                    $next = @($items | Where-Object { $_.At -and $_.Days -contains [int]$d.DayOfWeek -and $d + $_.At -gt $now } | ForEach-Object { $d + $_.At } | Sort-Object) | Select-Object -First 1
+                    $next = @($live | Where-Object { $_.Days -contains [int]$d.DayOfWeek -and $d + $_.At -gt $now } | ForEach-Object { $d + $_.At } | Sort-Object) | Select-Object -First 1
                 }
+                # a one-time entry may come sooner, or lie beyond the week
+                $next = @(@($items | Where-Object { $_.Valid -and $_.On -and $_.On + $_.At -gt $now } | ForEach-Object { $_.On + $_.At }) + @($next | Where-Object { $_ }) | Sort-Object) | Select-Object -First 1
                 $user   = "$env:USERDOMAIN\$env:USERNAME"
                 $resume = New-CimInstance -CimClass (Get-CimClass MSFT_TaskEventTrigger root/Microsoft/Windows/TaskScheduler) -ClientOnly -Property @{
                     Enabled      = $true
@@ -269,18 +342,26 @@ function t {
     }
 
     $findDupe = { param($s) $k = & $titleOf $s; for ($i = 0; $i -lt $tasks.Count; $i++) { if ((& $titleOf $tasks[$i]) -eq $k) { return $i } }; -1 }
-    # Describes when a routine entry runs, e.g. "weekdays at 14:00" or "every day, in the morning"
+    # Describes when a routine entry runs, e.g. "weekdays at 14:00, reminder" or "once, fri 13 nov at 17:00"
     $whenOf = {
         param($r)
         $day3 = 'sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'
-        $w = switch ("$($r.Days | Sort-Object)") { '0 1 2 3 4 5 6' { 'every day' } '1 2 3 4 5' { 'weekdays' } '0 6' { 'weekends' } default { ($r.Days | Sort-Object | ForEach-Object { $day3[$_] }) -join ',' } }
-        $w + $(if ($r.At) { " at $($r.At.ToString('hh\:mm'))" } else { ', in the morning' }) + $(if ($r.Quiet) { ', quiet' } else { '' })
+        $w = if ($r.On) { 'once, ' + $r.On.ToString('ddd d MMM', [Globalization.CultureInfo]::InvariantCulture).ToLower() }
+             else { switch ("$($r.Days | Sort-Object)") { '0 1 2 3 4 5 6' { 'every day' } '1 2 3 4 5' { 'weekdays' } '0 6' { 'weekends' } default { ($r.Days | Sort-Object | ForEach-Object { $day3[$_] }) -join ',' } } }
+        "$w at $($r.At.ToString('hh\:mm'))" + $(if ($r.Remind) { ', reminder' } else { '' })
     }
-    # Says why a routine entry looks like a mistyped day or time, or nothing. Only for routine add and list.
+    # Why a routine entry will not run
+    $whyOf = {
+        param($r)
+        if ($r.Sched) { return 'has no steps' }
+        $x = & $warnOf $r
+        if ($x) { $x } else { 'needs days and a time, e.g. weekdays 09:00' }
+    }
+    # Says why a routine entry looks like a mistyped day or time, or nothing. Only on demand, never on every t.
     $lev = { param($a, $b) $p = 0..$b.Length; for ($i = 1; $i -le $a.Length; $i++) { $c = @($i) + @(1..$b.Length | ForEach-Object { 0 }); for ($j = 1; $j -le $b.Length; $j++) { $c[$j] = [Math]::Min([Math]::Min($p[$j] + 1, $c[$j - 1] + 1), $p[$j - 1] + [int]($a[$i - 1] -ne $b[$j - 1])) }; $p = $c }; $p[$b.Length] }
     $warnOf = {
         param($r)
-        $words = @($r.Text -split '\s+')
+        $words = @(($r.Text -replace '^remind ', '') -split '\s+')
         if ($words.Count -lt 2) { return }
         $f = $words[0].ToLower()
         if (-not $r.Prefixed -and -not $r.At) {
@@ -423,6 +504,15 @@ function t {
                 '  t <Parent>: <task>       park it under a parent (made if new)'
                 '  t <Parent>:              type several tasks for a parent'
                 '  t "<text>"               park the text as typed, even if it starts with a verb'
+                'Routine'
+                '  t [remind] <when> <time> <task>      a task that comes back; remind adds a notification'
+                '  t [remind] <when> <time> <Parent>:   the same for a group; asks for its tasks'
+                '      when, repeating: daily  weekdays  weekends  mon,thu  mon-fri'
+                '      when, once:      today  tomorrow  next fri  2026-11-20        time: 14:00 or 2pm'
+                '  t routine| r             the routine, numbered'
+                '  t r <sel> <when> <time>  move tasks from the list into the routine'
+                '  t r <Parent>: [<step>]   add steps to a routine group'
+                '  t r x <n ...> | t r e    remove entries | open routine.txt'
                 'Verbs'
                 '  t                        show the current task'
                 '  t list   | l             all tasks, numbered'
@@ -437,7 +527,6 @@ function t {
                 '  t e <n> <new text>       reword task n'
                 '  t undo   | u             take back the last change'
                 '  t log    | g [name]      what you finished; how well a routine is kept'
-                '  t routine| r             the routine; t routine <line> adds, t routine del <n> removes'
                 '  t help   | h             this help'
                 'Rare'
                 '  t merge | t setup | t uninstall'
@@ -502,7 +591,7 @@ function t {
             }
             $wk = @($hist | Where-Object { $_.Day -ge $monday })
             & $say "this week: $(@($wk | Where-Object { $_.Kind -eq 'done' }).Count) done, $(@($wk | Where-Object { $_.Kind -eq 'dropped' }).Count) dropped, $(@($wk | Where-Object { $_.Kind -eq 'missed' }).Count) missed"
-            $keys = @($items | ForEach-Object { $_.Key } | Select-Object -Unique)
+            $keys = @($items | Where-Object { $_.Valid -and -not $_.On } | ForEach-Object { $_.Key } | Select-Object -Unique)
             if ($keys.Count) {
                 & $say 'routine, last 4 weeks:'
                 $pad = ($keys | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum
@@ -698,63 +787,119 @@ function t {
                 } else {
                     $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
                     & $stash 'routine' $len 'routine edit' @() $old
+                    foreach ($e in @(& $readRoutine $raw $now.Date)) { if (-not $e.Valid) { & $say "$($e.Raw)  ? $(& $whyOf $e)" Yellow } }
                 }
             }
             t   # show the task again, and re-arm reminders if the routine changed
             return
         }
+        'routine usage' {
+            & $say 'Usage: t r | t r e | t r x <numbers> | t r <Parent>: [<step>] | t r <numbers|Parent:> <when> <time>' Yellow
+            return
+        }
         'routine list' {
-            if (-not $items.Count) { & $say 'No routine yet. Add one: t routine <task>' DarkGray; return }
+            if (-not $items.Count) { & $say 'No routine yet. Add an entry: t weekdays 09:00 <task>' DarkGray; return }
             for ($i = 0; $i -lt $items.Count; $i++) {
-                & $say "$($i + 1). $($items[$i].Text)" -NoNewline
-                $warn = & $warnOf $items[$i]
-                if ($warn) { & $say "  $(& $whenOf $items[$i])" DarkGray -NoNewline; & $say "  ? $warn" Yellow }
-                else { & $say "  $(& $whenOf $items[$i])" DarkGray }
+                $e = $items[$i]
+                if (-not $e.Valid) { & $say "$($i + 1). $($e.Raw)" -NoNewline; & $say "  ? $(& $whyOf $e)" Yellow; continue }
+                & $say "$($i + 1). $($e.Text)" -NoNewline
+                & $say "  $(& $whenOf $e)" DarkGray
+                if ($e.Head) { foreach ($x in $e.Names) { & $say "     $($x.Substring($e.Key.Length + 2))" } }
             }
             return
         }
-        'routine add' {
-            # One line from the command line, or several typed at a prompt (any characters) until an empty line
-            $lines = @(if (Test-Path $ROUTINE) { [IO.File]::ReadAllLines($ROUTINE) })
-            $count = $lines.Count
-            # Dot-run for each line, so it can add to $lines and $items
-            $addLine = {
-                param($l)
-                $r = & $parseLine $l 0
-                if (-not $r) { return }
-                # A near miss is refused on the command line; at the prompt it can be added as written
-                $warn = & $warnOf $r
-                if ($warn) {
-                    & $say "  $warn" Yellow
-                    if ($rest.Count) { & $say '  Not added. To add it as written, type it at the prompt: t routine add' Yellow; return }
-                    if ((& $ask '  Add it as written? [y/N]') -ne 'y') { return }
-                }
-                if (@($items | ForEach-Object { $_.Key }) -contains $r.Key) { & $say "  already in your routine: $($r.Key)" DarkGray; return }
-                $lines += & $glue $l
-                $items += $r
-                & $say "  added to your routine: $($r.Text) ($(& $whenOf $r))" DarkGray
+        'routine new' {
+            # t [remind] <when> <time> [<Parent>:] [<task>]. What is missing is asked for, never guessed.
+            $text = if ($sched) { $sched.Text } else { $rest -join ' ' }
+            if (-not $sched) {
+                $when = "$(& $ask 'When? (days and a time, e.g. weekdays 09:00)')".Trim()
+                $sched = if ($when) { & $schedOf (@('remind') + @($when -split '\s+')) }
+                if (-not $sched -or $sched.Text) { & $say 'A routine entry needs days and a time, e.g. weekdays 09:00 or tomorrow 9am. Nothing was saved.' Yellow; return }
             }
-            if ($rest.Count) { . $addLine ($rest -join ' ') } else { while ($line = "$(& $ask 'Routine')".Trim()) { . $addLine $line } }
-            if ($lines.Count -gt $count) { & $save $ROUTINE @($lines | ForEach-Object { & $tidy $_ }) }
+            if ($sched.On -and $sched.On + $sched.At -le $now) { & $say 'That time has passed.' Yellow; return }
+            if (-not $text) { $text = "$(& $ask 'Task')".Trim(); if (-not $text) { & $say 'Nothing added.' DarkGray; return } }
+            $head = $text -match '^(?<p>[^:]+):$'
+            $name = if ($head) { $Matches.p.Trim() } else { & $titleOf $text }
+            if (@($items | ForEach-Object { $_.Key }) -contains $name) { & $say ("already in your routine: $name." + $(if ($head) { " To add a step: t r ${name}: <step>" })) DarkGray; return }
+            $new = @("$($sched.Sched) $text")
+            if ($head) {
+                $kids = @(while ($line = "$(& $ask 'Task')".Trim()) { $line })
+                if (-not $kids.Count) { & $say 'Nothing added.' DarkGray; return }
+                $new += @($kids | Select-Object -Unique | ForEach-Object { "  $_" })
+            }
+            & $writeRoutine ($rlines + $new) 'routine'
+            & $say "routine: $text  ($(& $whenOf $sched))" DarkGray
+            return
+        }
+        'routine change' {
+            # "<numbers|Parent:> <when> <time>" moves tasks from the list into the routine;
+            # "<Parent>: [<step>]" adds steps to a routine block
+            $k = 0
+            if ($rest[0] -match '^[\d,\s]+$') { while ($k -lt $rest.Count -and $rest[$k] -match '^[\d,\s]+$') { $k++ } }
+            else { while ($k -lt $rest.Count -and -not $rest[$k].EndsWith(':')) { $k++ }; $k++ }
+            if ($k -gt $rest.Count) { & $say 'Usage: t r | t r e | t r x <numbers> | t r <Parent>: [<step>] | t r <numbers|Parent:> <when> <time>' Yellow; return }
+            $tail = @($rest | Select-Object -Skip $k)
+            $rest = @($rest | Select-Object -First $k)
+            $sched = if ($tail.Count) { & $schedOf $tail }
+            if ($sched -and -not $sched.Text) {
+                if (-not $tasks.Count) { & $say 'Nothing to do. Add one: t <task>' DarkGray; return }
+                $pick = & $select 'r'
+                if ($null -eq $pick) { return }
+                $pick = @($pick)
+                if ($sched.On -and $sched.On + $sched.At -le $now) { & $say 'That time has passed.' Yellow; return }
+                # Plain tasks become an entry each; the picked steps of one parent become one block
+                $new = @(); $names = @(); $said = @(); $blocks = @{}
+                foreach ($i in $pick) {
+                    $p = & $parentOf $tasks[$i]
+                    if (-not $p) { $new += "$($sched.Sched) $($tasks[$i])"; $names += & $titleOf $tasks[$i]; $said += $tasks[$i]; continue }
+                    if ($blocks[$p]) { continue }
+                    $blocks[$p] = $true
+                    $new += "$($sched.Sched) ${p}:"; $names += $p; $said += "${p}:"
+                    foreach ($j in $pick) { if ((& $parentOf $tasks[$j]) -eq $p) { $new += "  $($tasks[$j].Substring($tasks[$j].IndexOf(': ') + 2))" } }
+                }
+                $have = @($items | ForEach-Object { $_.Key })
+                foreach ($x in $names) { if ($have -contains $x) { & $say "already in your routine: $x. Nothing was changed." Yellow; return } }
+                $oldRoutine = $rlines
+                $len = if (Test-Path $DONE) { (Get-Item $DONE).Length } else { 0 }
+                $tasks = @(for ($i = 0; $i -lt $tasks.Count; $i++) { if ($i -notin $pick) { $tasks[$i] } })
+                if (-not (& $commit 'routine')) { return }
+                & $writeRoutine ($rlines + $new) ''
+                & $stash 'both' $len 'routine' $before $oldRoutine
+                foreach ($x in $said) { & $say "moved to your routine: $x  ($(& $whenOf $sched))" DarkGray }
+                t
+                return
+            }
+            $text = $rest -join ' '
+            if ($text -notmatch '^(?<p>[^:]+):$') { & $say 'Usage: t r | t r e | t r x <numbers> | t r <Parent>: [<step>] | t r <numbers|Parent:> <when> <time>' Yellow; return }
+            $name = $Matches.p.Trim()
+            $e = @($items | Where-Object { $_.Key -eq $name })[0]
+            if (-not $e) { & $say "No routine called '$name'. See: t r" Yellow; return }
+            if (-not $e.Head) { & $say "$($e.Key) has no steps; edit it with: t r e" Yellow; return }
+            $steps = @(if ($tail.Count) { $tail -join ' ' } else { while ($line = "$(& $ask 'Task')".Trim()) { $line } })
+            $steps = @($steps | Select-Object -Unique | Where-Object { $e.Titles -notcontains (& $titleOf "$($e.Key): $_") })
+            if (-not $steps.Count) { & $say 'Nothing added.' DarkGray; return }
+            $lines = @($rlines | Select-Object -First $e.Last) + @($steps | ForEach-Object { "  $_" }) + @($rlines | Select-Object -Skip $e.Last)
+            & $writeRoutine $lines 'routine'
+            & $say "added to $($e.Key): $($steps -join ', ')" DarkGray
             return
         }
         'routine del' {
-            if (-not $rest.Count) { & $say 'Usage: t routine del <number|text>  (numbers from t routine list)' Yellow; return }
+            if (-not $rest.Count -or ($rest -join ' ') -notmatch '^[\d,\s]+$') { & $say 'Usage: t r x <numbers>  (numbers from t r)' Yellow; return }
             if (-not $items.Count) { & $say 'Your routine is empty.' DarkGray; return }
-            $pick = & $select 'routine del' (@($items).Text) 't routine list'
+            $pick = & $select 'r x' @($items | ForEach-Object { $_.Raw }) 't r'
             if ($null -eq $pick) { return }
-            $pick | ForEach-Object { & $say "  $($items[$_].Text)  $(& $whenOf $items[$_])" }
+            $pick | ForEach-Object { & $say "  $($items[$_].Text)$(if ($items[$_].Valid) { "  $(& $whenOf $items[$_])" })" }
             if ((& $ask 'Remove from your routine? [y/N]') -ne 'y') { return }
-            $gone = @($pick | ForEach-Object { $items[$_].Line })
+            $gone = @($pick | ForEach-Object { $items[$_].Line..$items[$_].Last })
             $n = 0
-            $lines = @(foreach ($l in [IO.File]::ReadAllLines($ROUTINE)) { $n++; if ($n -notin $gone) { $l } })
-            & $save $ROUTINE @($lines | ForEach-Object { & $tidy $_ })
-            & $say "  removed $($gone.Count) from your routine." DarkGray
+            & $writeRoutine @(foreach ($l in $rlines) { $n++; if ($n -notin $gone) { $l } }) 'routine del'
+            & $say "  removed $(@($pick).Count) from your routine." DarkGray
             return
         }
         '--remind' {
             # Run by the OneTask scheduled task. The routine code above has already put due tasks on top
             # and re-armed the task; this shows them, batched into one toast (several after a wake).
+            if ($OneTaskNoArm) { & $say ($dueShown -join ', '); return }   # tests: what the toast would name
             if (-not $dueShown.Count -or $PSVersionTable.PSEdition -ne 'Desktop') { return }
             $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
             $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
@@ -808,14 +953,19 @@ function t {
             $r = Join-Path $dir 'routine.txt'
             if (-not (Test-Path $r)) {
                 [IO.File]::WriteAllLines($r, [string[]]@(
-                    '# Routine: one task per line, added to your list every day. Lines starting with # are ignored.'
-                    '# Optional prefixes: weekdays, weekends, or days such as mon,thu or mon-fri; then a time'
-                    '# (14:00 or 2pm) to add the task at that time instead of in the morning; then quiet for'
-                    '# no notification. Steps: name: a / b. Examples:'
-                    '#   review inbox'
-                    '#   weekdays standup prep'
+                    '# Routine: tasks that come back. Add entries with t (see t help) or here, one per line:'
+                    '#   [remind] <when> <time> <task>'
+                    '# when: daily, weekdays, weekends, days such as mon,thu or mon-fri (these repeat),'
+                    '#       or today, tomorrow, next fri, 2026-11-20 (these happen once)'
+                    '# time: 14:00 or 2pm. At that time the task goes to the top of your list;'
+                    '#       with remind in front you also get a notification.'
+                    '# A line ending in a colon starts a group; its tasks go on indented lines under it.'
+                    '# Lines starting with # are ignored. Examples:'
                     '#   weekdays 14:00 timesheet'
-                    '#   mon,thu 17:00 call supplier'))
+                    '#   remind mon,thu 17:00 call supplier'
+                    '#   remind weekdays 07:00 Morning:'
+                    '#     stretch'
+                    '#     plan the day'))
             }
             # The next t arms the reminder task once this key exists and its Stamp differs from routine.txt
             if (-not (Test-Path $key)) { New-Item $key | Out-Null }
@@ -901,6 +1051,11 @@ function t {
                 & $say $(if ($known) { "parked under $known." } else { 'parked.' }) DarkGray
             }
             if ($near) { & $say "new group '$p' (close to '$near'; t undo)" DarkGray }
+            # A mistyped day in front of a time: it was parked, since only a valid schedule makes a routine entry
+            if (-not $literal -and $rest.Count -gt 2 -and "$($rest[0]) $($rest[1])" -match '(^| )\d{1,2}([:.]\d{2}|am|pm|[:.]\d{2}(am|pm))( |$)') {
+                $warn = & $warnOf (& $parseLine $text 0 $now.Date)
+                if ($warn) { & $say "$warn. For a routine entry: weekdays 09:00 <task>  (t undo)" DarkGray }
+            }
             return
         }
     }

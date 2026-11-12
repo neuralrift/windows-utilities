@@ -15,7 +15,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 5. **One selection rule.** `done`, `skip`, `now`, `del` (and `t r <sel> <schedule>`) take nothing (the current task), numbers, or one `Parent:`. No text matching in anything that changes data; `t find` gives the numbers. Only `t find` and `t log` match text.
 6. **Done is a log.** `t done` appends `YYYY-MM-DD task` to `done.txt`, the routine appends `YYYY-MM-DD missed: task`, and `t del` appends `YYYY-MM-DD dropped: task`. Only reports (`t log`) read it back; nothing acts on it, and `t log` never writes.
 7. **Sync is the file system.** Data lives in the task folder chosen at setup (by default `Apps\one-task\` in a OneDrive, Google Drive, Dropbox or iCloud Drive folder), never in this repo. No sync code, network calls, accounts or servers.
-8. **Shows on terminal open.** The profile dot-sources `t.ps1`, which ends by calling `t` with `$OneTaskOpening` set, so an empty list prints nothing there; a typed `t` still prints "Nothing to do".
+8. **Quiet until asked.** Opening a terminal runs nothing and prints nothing: `t` is a module that PowerShell loads the first time `t` is typed. The task shows when the user types `t`.
 9. **Undo before confirm.** A change to one task happens at once, says what it did, and can be taken back with `t undo`. Deleting, and finishing several tasks at once, ask first; moving never asks. A batch is one undoable change.
 10. **Command line first, same rules in the file.** Every common change to `todo.txt` and `routine.txt` is possible through `t`. What the command line accepts and what a hand-edited file accepts are the same; a hand-written line that does not fit is kept, never run, and reported (`t r`, or after `t e`/`t r e`).
 
@@ -25,10 +25,12 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
 
 - One file, `t.ps1`; the script stays in the repo. Only the function `t` is meant for the user; script-level variables are prefixed `OneTask`, since dot-sourcing puts them in the session.
 - The version is `$OneTaskVersion` in `t.ps1`. There is deliberately no version command.
-- `setup` writes one line ending in `# one-task` to the all-hosts `profile.ps1` of each installed edition (Documents via `GetFolderPath('MyDocuments')`). The line carries `-Folder`, the task folder used as is, and is guarded by `Test-Path` because profiles may sync between PCs.
-- `setup` changes the CurrentUser execution policy only when it would block the profile, and saves the old value and edition in `HKCU\Software\OneTask`. `uninstall` restores it only if it is still `RemoteSigned`, removes the marked lines, the scheduled task and the registry key, and keeps the task data.
-- `-Folder` is the task folder as is; `-Root` is a synced folder and means `<root>\Apps\one-task` (older profile lines use it). Without either, `$env:OneDrive\Apps\one-task`. Don't name locals `$folder` or `$root`: names are case-insensitive and would shadow the parameters.
-- Setup detects synced folders from known places only (OneDrive env vars, `My Drive` on any drive or in the user folder, Dropbox `info.json`, `%USERPROFILE%\Dropbox`, `%USERPROFILE%\iCloudDrive`) and always offers "Other folder". Switching folders offers to move the files from the folder in the old profile line.
+- The folder is a module, `OneTask`: `OneTask.psd1` declares the one function `t` (so PowerShell finds it without loading anything) and `OneTask.psm1` dot-sources `t.ps1` with the task folder stored in `HKCU\Software\OneTask` (`Folder`). The psm1 resolves the junction first, so `$OneTaskScript` is the repo path. `ModuleVersion` must equal `$OneTaskVersion`; `test.ps1` checks it.
+- `t.ps1` acts when run as a script (`t.ps1 setup`, the reminder task) and only defines `t` when dot-sourced (the module, the tests): it checks `$MyInvocation.InvocationName`.
+- `setup` creates a junction to this folder in `Documents\WindowsPowerShell\Modules\OneTask` and, when PowerShell 7 is installed, `Documents\PowerShell\Modules\OneTask` (Documents via `GetFolderPath('MyDocuments')`). It keeps a correct link, replaces a link to elsewhere, and refuses to touch a real folder. It removes the profile line older versions wrote (ending in `$OneTaskMarker`, `# one-task`) and warns about other profile lines that load `t.ps1`. A junction is deleted by `$unlink`: it clears the read-only flag that OneDrive can set on the link, then `[IO.Directory]::Delete`, which never touches the target.
+- `setup` changes the CurrentUser execution policy only when it would block the module, and saves the old value and edition in `HKCU\Software\OneTask`. `uninstall` restores it only if it is still `RemoteSigned`, removes the links, any old profile line, the scheduled task and the registry key, and keeps the task data.
+- `-Folder` is the task folder as is (the module passes the stored one); `-Root` is a synced folder and means `<root>\Apps\one-task`. Without either, `$env:OneDrive\Apps\one-task`. Don't name locals `$folder` or `$root`: names are case-insensitive and would shadow the parameters.
+- Setup detects synced folders from known places only (OneDrive env vars, `My Drive` on any drive or in the user folder, Dropbox `info.json`, `%USERPROFILE%\Dropbox`, `%USERPROFILE%\iCloudDrive`) and always offers "Other folder". Switching folders offers to move the files from the stored folder (or the one in an old profile line).
 
 ### Dispatch
 
@@ -93,7 +95,7 @@ A terminal todo, command `t`, for a user who gets distracted easily. It shows on
   - variable names are case-insensitive: don't reuse a name such as `$TODO`/`$todo` for two things
 - No dependencies: only built-in PowerShell and .NET.
 - Bump `$OneTaskVersion` per the root versioning rules, and update the command tables and Known limitations in `README.md`. Keep `t help`, the usage comment at the top of `t.ps1` and the README saying the same thing.
-- Not built on purpose: text matching in commands that change data; reminders for a single step of a block (give it its own entry); routine entries without a time; nested parents; goals or OKRs on top of `t log`; priorities or flags (line order is the priority); a `clean` command (tidying is automatic); a summary on terminal open.
+- Not built on purpose: text matching in commands that change data; reminders for a single step of a block (give it its own entry); routine entries without a time; nested parents; goals or OKRs on top of `t log`; priorities or flags (line order is the priority); a `clean` command (tidying is automatic); anything shown or run on terminal open.
 
 ## Before finishing any change
 
@@ -110,5 +112,5 @@ A script cannot check these, so do them by hand when you touch that area:
 
 - Reminders, with the real clock: create `HKCU\Software\OneTask` with an empty `Stamp` and a temp `routine.txt` with a `remind` entry two minutes ago and one in 30 minutes. The first `t` must register `OneTask` with logon, event and time triggers; a second `t` must not re-register. Add two more past-time `remind` entries, run `Start-ScheduledTask OneTask` and check for one batched toast and `LastTaskResult` 0. Then uninstall (task and key gone) and restore any real install with `setup`.
 - Setup detection: pipe `99` to `t.ps1 setup`; it prints the menu and stops without changing anything. Fake Google Drive, Dropbox and iCloud by pointing `USERPROFILE`/`LOCALAPPDATA` at a temp folder with those subfolders and a Dropbox `info.json`.
-- `setup`/`uninstall`: pass `-Folder <temp>`, check both `profile.ps1` files, and confirm `uninstall` leaves profiles, policy and `HKCU\Software\OneTask` as they were.
+- `setup`/`uninstall`: after `setup`, both `Modules\OneTask` entries are junctions to this folder, no profile has a `# one-task` line, and a new shell of each edition shows `(Get-Command t).Source` as `OneTask` without importing anything; `t` works there. `uninstall` removes both links (the repo folder stays), the task and `HKCU\Software\OneTask`, and leaves the policy as it was. Restore a real install with `setup` afterwards.
 - `t e` with no terminal editor on the PATH: Notepad opens, the terminal waits, and the task shows when Notepad closes.

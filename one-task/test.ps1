@@ -30,8 +30,11 @@ function Is([string]$Name, $Actual, $Expected) {
 }
 
 try {
+    Reset 'a'
+    Is 'load is silent' ((. "$PSScriptRoot\t.ps1" -Folder $dir 6>&1 | ForEach-Object { "$_" }) -join '|')   ''
+    Is 'manifest'       ((Import-PowerShellDataFile "$PSScriptRoot\OneTask.psd1").ModuleVersion)   $OneTaskVersion
+    Is 'exports t'      ("$((Import-PowerShellDataFile "$PSScriptRoot\OneTask.psd1").FunctionsToExport)")   't'
     Reset
-    . "$PSScriptRoot\t.ps1" -Folder $dir
 
     # --- basics ---
     Is 'empty'        (Run)                      'Nothing to do. Add one: t <task>'

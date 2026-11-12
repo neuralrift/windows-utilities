@@ -1,10 +1,10 @@
 # One Task
 
-A terminal todo that shows **one task**: the one that matters now. Every new terminal shows it; nothing in normal use shows the whole list. One PowerShell script, no dependencies, plain-text data synced by your cloud storage.
+A terminal todo that shows **one task**: the one that matters now. Type `t` and you see it; nothing in normal use shows the whole list. One PowerShell script, no dependencies, plain-text data synced by your cloud storage.
 
 ## How it works
 
-- The command is `t`. The script lives in this repo; your profile dot-sources it, so every new terminal prints the current task. With nothing to do, a new terminal prints nothing; typing `t` still says so.
+- The command is `t`. The script lives in this repo and is installed as a PowerShell module, `OneTask`: PowerShell loads it the first time you type `t` in a session, so opening a terminal costs nothing and prints nothing.
 - Tasks live in the task folder chosen at setup, by default `Apps\one-task\` in your OneDrive, Google Drive, Dropbox or iCloud Drive folder:
   - `todo.txt`: one task per line, the first is the current task. Tasks that belong together sit indented under a parent line (see Parents). Any text editor works, on the PC or your phone; blank lines are ignored.
   - `done.txt`: a log of `YYYY-MM-DD task` lines, `YYYY-MM-DD missed: task` for routine tasks left undone, and `YYYY-MM-DD dropped: task` for deleted ones. Only `t log` reads it back.
@@ -16,7 +16,7 @@ A terminal todo that shows **one task**: the one that matters now. Every new ter
 
 - Windows 11 with the built-in Windows PowerShell 5.1; PowerShell 7 is supported too.
 - A synced folder: OneDrive (personal or work), Google Drive for desktop, Dropbox (personal or business) or iCloud Drive. Any other folder works too, but then nothing syncs it.
-- An execution policy that lets your profile run local scripts (`RemoteSigned`). `setup` sets this for the current user if needed.
+- An execution policy that lets PowerShell load local scripts and modules (`RemoteSigned`). `setup` sets this for the current user if needed.
 
 ## Setup (once, no elevation needed)
 
@@ -37,11 +37,12 @@ powershell -ExecutionPolicy Bypass -File t.ps1 setup
 - uses `Apps\one-task\` inside a synced folder, or your folder as is; skip the question with `setup -Folder <folder>` (used as is) or `setup -Root <synced folder>` (adds `Apps\one-task`)
 - if you switch folders, offers to move your task files from the old one
 - creates a commented `routine.txt` template
-- adds one line, marked `# one-task`, to the all-hosts profile (`profile.ps1`) of Windows PowerShell and, if installed, PowerShell 7, so it also works in VS Code's terminal
-- creates `HKCU\Software\OneTask`, after which the next `t` registers the reminder task (see Reminders)
-- sets the CurrentUser execution policy to `RemoteSigned` only if the current one would block the profile, and remembers the old value in `HKCU\Software\OneTask`
+- links this folder into `Documents\WindowsPowerShell\Modules\OneTask` and, if PowerShell 7 is installed, `Documents\PowerShell\Modules\OneTask` (directory junctions, no elevation), so `t` works in both editions and in VS Code's terminal, and edits to the repo reach new sessions
+- stores the task folder in `HKCU\Software\OneTask`, after which the next `t` registers the reminder task (see Reminders)
+- removes the profile line that older versions added (marked `# one-task`); it does not touch anything else in your profile
+- sets the CurrentUser execution policy to `RemoteSigned` only if the current one would block the module, and remembers the old value in `HKCU\Software\OneTask`
 
-Re-running `setup` is safe; it replaces its line. Re-run it if you move the repo folder. `t setup` from a terminal keeps the current task folder; to choose again, run the script directly as above.
+Re-running `setup` is safe; it keeps links that are right and replaces ones that point elsewhere. Re-run it if you move the repo folder. `t setup` from a terminal keeps the current task folder; to choose again, run the script directly as above.
 
 ## Commands
 
@@ -263,7 +264,7 @@ Merged copies are deleted; most sync apps keep them in their recycle bin.
 t uninstall
 ```
 
-Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the `# one-task` profile lines (and a `profile.ps1` left empty) and the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Everything in the task folder is kept on purpose; delete the folder yourself if you no longer want your tasks.
+Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the two module links (never what they point to), any `# one-task` profile line left by an older version (and a `profile.ps1` left empty), the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Everything in the task folder is kept on purpose; delete the folder yourself if you no longer want your tasks.
 
 ## Known limitations
 
@@ -285,7 +286,8 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 - **Undo is one step.** It covers the last change `t` made to your tasks or your routine, and an edit made through `t e` or `t r e`. It does not bring back merged conflict copies or a one-time entry that has arrived. If the files changed in between (a sync, a reminder, a new routine day), it asks first and leaves `done.txt` alone.
 - **Changes from outside:** if `todo.txt` changes while `t` waits for your answer (a sync or a reminder), `t` changes nothing and asks you to run the command again.
 - **The editor blocks the terminal:** `t e` waits until the editor closes, Notepad included.
-- **Several PCs:** if Documents is synced (OneDrive folder backup does this), the profile line is shared too. It is skipped on a PC where the script path does not exist, so clone the repo to the same path on each PC. The task folder path must match as well.
+- **Several PCs:** run `setup` on each PC. The task folder is stored per PC, and sync apps such as OneDrive do not sync the module links, even when Documents is synced. If you used an older version, its profile line may be shared through a synced Documents folder: running `setup` on one PC removes it there, so `t` is missing on the others until they run `setup`.
+- **First `t` in a session:** it takes about half a second while PowerShell loads the module; later ones take a few milliseconds.
 - **Google Drive streaming:** in the default streaming mode files are online-only, so the first `t` after a restart can be slow while they download. Mark the task folder "Available offline" to avoid it.
 - **Sync app detection:** only the default locations are found. Pick "Other folder" for anything else.
 - **Merging is by text:** a task changed on both PCs comes back as two tasks; a task finished more than a week before the copy was written can come back. Both show in the confirmation before anything changes.

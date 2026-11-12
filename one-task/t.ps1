@@ -8,7 +8,7 @@
 #        t setup | t uninstall   (t --remind is run by the scheduled task)
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$Folder,   # the task folder, used as is (what setup writes to the profile line)
+    [string]$Folder,   # the task folder, used as is (OneTask.psm1 passes the one setup stored)
     [string]$Root,     # a synced folder; tasks go in its Apps\one-task
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Command
 )
@@ -16,7 +16,7 @@ param(
 $OneTaskVersion = '1.0.0'
 $OneTaskScript  = $PSCommandPath
 $OneTaskDir     = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'Apps\one-task' } elseif ($env:OneDrive) { Join-Path $env:OneDrive 'Apps\one-task' } else { '' }
-$OneTaskMarker  = '# one-task'
+$OneTaskMarker  = '# one-task'   # ends the profile line older versions wrote; setup and uninstall remove it
 
 function t {
     # One argument containing a space was quoted: it is task text as typed, whatever it starts with
@@ -45,6 +45,7 @@ function t {
     $DONE  = Join-Path "$dir\" 'done.txt'
     $docs  = [Environment]::GetFolderPath('MyDocuments')
     $profs = @("$docs\WindowsPowerShell\profile.ps1", "$docs\PowerShell\profile.ps1")
+    $mods  = @("$docs\WindowsPowerShell\Modules\OneTask", "$docs\PowerShell\Modules\OneTask")
     $key   = 'HKCU:\Software\OneTask'
     $now   = if ($OneTaskNow) { [datetime]$OneTaskNow } else { Get-Date }   # $OneTaskNow fakes the clock in tests
     $day   = $now.ToString('yyyy-MM-dd')
@@ -341,6 +342,29 @@ function t {
         $copies = @(if ($cmd -in '', 'list', 'merge') { Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(todo|done|routine)[-_ (].*\.(txt|last|undo|age)$' } })
     }
 
+    # The folder a link points to, or the path itself
+    $realDir = { param($p) $i = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; if ($i -and $i.LinkType -eq 'Junction') { "$(@($i.Target)[0])" } else { "$p" } }
+    # Removes a module link, never what it points to. A link in a OneDrive folder can be read-only, which makes
+    # the delete fail, so that flag is cleared on the link first. Says why when it cannot; $true when removed.
+    $unlink = {
+        param($m)
+        try {
+            $i = Get-Item -LiteralPath $m -Force
+            if ($i.Attributes -band [IO.FileAttributes]::ReadOnly) { $i.Attributes = $i.Attributes -bxor [IO.FileAttributes]::ReadOnly }
+            [IO.Directory]::Delete($m)
+            $true
+        } catch { & $say "Could not remove $m ($($_.Exception.Message))" Yellow; $false }
+    }
+    # Removes the profile line older versions wrote (a profile left empty is deleted); $true if there was one
+    $unprofile = {
+        param($p)
+        if (-not (Test-Path $p)) { return $false }
+        $all = @([IO.File]::ReadAllLines($p))
+        $lines = @($all | Where-Object { -not $_.EndsWith($OneTaskMarker) })
+        if ($lines.Count -eq $all.Count) { return $false }
+        if (@($lines | Where-Object { $_.Trim() }).Count) { [IO.File]::WriteAllLines($p, [string[]]$lines, (New-Object Text.UTF8Encoding $true)) } else { Remove-Item $p }
+        $true
+    }
     $findDupe = { param($s) $k = & $titleOf $s; for ($i = 0; $i -lt $tasks.Count; $i++) { if ((& $titleOf $tasks[$i]) -eq $k) { return $i } }; -1 }
     # Describes when a routine entry runs, e.g. "weekdays at 14:00, reminder" or "once, fri 13 nov at 17:00"
     $whenOf = {
@@ -493,7 +517,7 @@ function t {
                 $e = if (Test-Path $agePath) { (& $readAge)[$parts[0].Trim()] }
                 if ($e -and $e.Skips -ge 3) { & $say "skipped $($e.Skips) times: too big, or not wanted? (t e to reword it, t del to drop it)" DarkGray }
             }
-            elseif (-not $OneTaskOpening) { & $say 'Nothing to do. Add one: t <task>' DarkGray }
+            else { & $say 'Nothing to do. Add one: t <task>' DarkGray }
             if ($copies.Count) { & $say 'Your sync app saved a conflict copy. Run: t merge' Yellow }
             return
         }
@@ -928,7 +952,7 @@ function t {
             return
         }
         'setup' {
-            # -Folder or -Root (from the command line, or from the profile line when run as t setup) wins;
+            # -Folder or -Root (from the command line, or the stored folder when run as t setup) wins;
             # otherwise pick one of the synced folders found on this PC, or any other folder
             $target = if ($Folder) { $Folder } elseif ($Root) { Join-Path $Root 'Apps\one-task' } else { '' }
             if (-not $target) {
@@ -959,14 +983,15 @@ function t {
             $target = (Resolve-Path $target).Path
             $dir = $target
 
-            # Offer to bring the tasks over from the folder the old profile line used
+            # Offer to bring the tasks over from the folder used so far (stored by setup, or in an old profile line)
+            $from = (Get-ItemProperty $key -ErrorAction SilentlyContinue).Folder
             $prev = @(Get-Content $profs -ErrorAction SilentlyContinue | Where-Object { $_.EndsWith($OneTaskMarker) })
-            if ($prev.Count -and $prev[0] -match "-(Folder|Root) '((?:[^']|'')*)'") {
+            if (-not $from -and $prev.Count -and $prev[0] -match "-(Folder|Root) '((?:[^']|'')*)'") {
                 $from = $Matches[2].Replace("''", "'")
                 if ($Matches[1] -eq 'Root') { $from = Join-Path $from 'Apps\one-task' }
-                if ($from -ne $target -and (Test-Path (Join-Path $from 'todo.txt')) -and -not (Test-Path (Join-Path $target 'todo.txt')) -and
-                    (& $ask "Move your tasks from $from? [y/N]") -eq 'y') { Get-ChildItem $from -File | Move-Item -Destination $target }
             }
+            if ($from -and $from -ne $target -and (Test-Path (Join-Path $from 'todo.txt')) -and -not (Test-Path (Join-Path $target 'todo.txt')) -and
+                (& $ask "Move your tasks from $from? [y/N]") -eq 'y') { Get-ChildItem $from -File | Move-Item -Destination $target }
             $r = Join-Path $dir 'routine.txt'
             if (-not (Test-Path $r)) {
                 [IO.File]::WriteAllLines($r, [string[]]@(
@@ -988,28 +1013,35 @@ function t {
             if (-not (Test-Path $key)) { New-Item $key | Out-Null }
             Set-ItemProperty $key Stamp ''
 
-            # Documents, and so the profiles, may sync between PCs, so the line is skipped where the script path does not exist
-            $s = $OneTaskScript.Replace("'", "''")
-            $line = "if (Test-Path '$s') { . '$s' -Folder '$($target.Replace("'", "''"))' }  $OneTaskMarker"
+            Set-ItemProperty $key Folder $target
+
+            # t is a module: a link in each edition's Documents\...\Modules to this folder, so PowerShell loads it the
+            # first time t is typed and a new terminal costs nothing. Edits in this folder reach new sessions.
+            $src = (& $realDir (Split-Path $OneTaskScript)).TrimEnd('\')
             $hasPwsh = [bool](Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue)
-            foreach ($p in $profs) {
-                if ($p -eq $profs[1] -and -not $hasPwsh -and -not (Test-Path (Split-Path $p))) { continue }
-                $lines = @(if (Test-Path $p) { [IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) } })
-                New-Item (Split-Path $p) -ItemType Directory -Force | Out-Null
-                [IO.File]::WriteAllLines($p, [string[]]($lines + $line), (New-Object Text.UTF8Encoding $true))
-                & $say "Profile: $p"
+            foreach ($m in $mods) {
+                if ($m -eq $mods[1] -and -not $hasPwsh -and -not (Test-Path (Split-Path (Split-Path $m)))) { continue }
+                $item = Get-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue
+                if ($item -and $item.LinkType -ne 'Junction') { & $say "$m exists and is not a link; remove it, then run setup again." Yellow; continue }
+                if ($item -and "$(& $realDir $m)".TrimEnd('\') -eq $src) { & $say "Module: $m"; continue }
+                if ($item -and -not (& $unlink $m)) { continue }   # a link to an old place
+                New-Item (Split-Path $m) -ItemType Directory -Force | Out-Null
+                New-Item -ItemType Junction -Path $m -Target $src | Out-Null
+                & $say "Module: $m -> $src"
             }
+            # Older versions loaded t from the profile; such a line would hide the module
+            foreach ($p in $profs) { if (& $unprofile $p) { & $say "Removed the old one-task line from $p" } }
             Get-ChildItem ($profs | Split-Path) -Filter '*profile.ps1' -ErrorAction SilentlyContinue |
                 Select-String -Pattern '[\\/"'' ]t\.ps1' | Where-Object { -not $_.Line.EndsWith($OneTaskMarker) } |
                 ForEach-Object { & $say "Old t line, remove it: $($_.Path):$($_.LineNumber)" Yellow }
 
-            # The profile only runs if the execution policy allows local scripts
+            # The module only loads if the execution policy allows local scripts
             $gpo  = @('MachinePolicy', 'UserPolicy' | ForEach-Object { "$(Get-ExecutionPolicy -Scope $_)" } | Where-Object { $_ -ne 'Undefined' })
             $user = "$(Get-ExecutionPolicy -Scope CurrentUser)"
             $eff  = if ($gpo.Count) { $gpo[0] } elseif ($user -ne 'Undefined') { $user } else { "$(Get-ExecutionPolicy -Scope LocalMachine)" }
             if ($eff -eq 'Undefined') { $eff = if ($PSVersionTable.PSEdition -eq 'Core') { 'RemoteSigned' } else { 'Restricted' } }
             if ($eff -in 'Restricted', 'AllSigned') {
-                if ($gpo.Count) { & $say "Group Policy sets the execution policy to $eff, so the profile cannot load t." Yellow }
+                if ($gpo.Count) { & $say "Group Policy sets the execution policy to $eff, so PowerShell cannot load t." Yellow }
                 else {
                     Set-ItemProperty $key PrevPolicy $user
                     Set-ItemProperty $key Edition $PSVersionTable.PSEdition
@@ -1019,17 +1051,16 @@ function t {
                     else { & $say 'Could not set the execution policy to RemoteSigned.' Yellow }
                 }
             }
-            & $say "Tasks: $dir. Open a new terminal to see your task." DarkGray
+            & $say "Tasks: $dir. Type t in a new terminal." DarkGray
             return
         }
         'uninstall' {
-            foreach ($p in $profs) {
-                if (-not (Test-Path $p)) { continue }
-                $lines = @([IO.File]::ReadAllLines($p) | Where-Object { -not $_.EndsWith($OneTaskMarker) })
-                if (@($lines | Where-Object { $_.Trim() }).Count) { [IO.File]::WriteAllLines($p, [string[]]$lines, (New-Object Text.UTF8Encoding $true)) }
-                else { Remove-Item $p }
-                & $say "Profile cleaned: $p"
+            foreach ($m in $mods) {
+                $item = Get-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue
+                if ($item -and $item.LinkType -eq 'Junction') { if (& $unlink $m) { & $say "Module link removed: $m" } }
+                elseif ($item) { & $say "$m is not a link; left as it is." Yellow }
             }
+            foreach ($p in $profs) { if (& $unprofile $p) { & $say "Profile cleaned: $p" } }
             if (Get-ScheduledTask OneTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask OneTask -Confirm:$false; & $say 'Reminder task removed' }
             if (Test-Path $key) {
                 $k = Get-ItemProperty $key
@@ -1102,5 +1133,5 @@ function t {
     }
 }
 
-# Bare t shows the one task whenever a terminal opens; an empty list stays silent there
-if ($Command) { t @Command } else { $OneTaskOpening = $true; t; $OneTaskOpening = $false }
+# Run as a script (t.ps1 setup, the reminder task) it acts; dot-sourced (by OneTask.psm1, or a test) it only defines t
+if ($Command) { t @Command } elseif ($MyInvocation.InvocationName -ne '.') { t }

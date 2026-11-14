@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File t.ps1 setup
 - uses `Apps\one-task\` inside a synced folder, or your folder as is; skip the question with `setup -Folder <folder>` (used as is) or `setup -Root <synced folder>` (adds `Apps\one-task`)
 - if you switch folders, offers to move your task files from the old one
 - creates a commented `routine.txt` template
-- links this folder into `Documents\WindowsPowerShell\Modules\OneTask` and, if PowerShell 7 is installed, `Documents\PowerShell\Modules\OneTask` (directory junctions, no elevation), so `t` works in both editions and in VS Code's terminal, and edits to the repo reach new sessions
+- links this folder as `OneTask` into each edition's user module folder (directory junctions, no elevation), so `t` works in both editions and in VS Code's terminal, and edits to the repo reach new sessions. It asks Windows PowerShell and, if installed, PowerShell 7 for that folder with your profile loaded, so a module folder moved out of Documents (by a profile or `powershell.config.json`) is found; by default it is `Documents\WindowsPowerShell\Modules` and `Documents\PowerShell\Modules`. A `OneTask` link left in those Documents folders after such a move is removed
 - stores the task folder in `HKCU\Software\OneTask`, after which the next `t` registers the reminder task (see Reminders)
 - removes the profile line that older versions added (marked `# one-task`); it does not touch anything else in your profile
 - sets the CurrentUser execution policy to `RemoteSigned` only if the current one would block the module, and remembers the old value in `HKCU\Software\OneTask`
@@ -264,7 +264,7 @@ Merged copies are deleted; most sync apps keep them in their recycle bin.
 t uninstall
 ```
 
-Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the two module links (never what they point to), any `# one-task` profile line left by an older version (and a `profile.ps1` left empty), the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Everything in the task folder is kept on purpose; delete the folder yourself if you no longer want your tasks.
+Run it from the same shell edition that ran `setup` (Windows PowerShell or PowerShell 7) so it can restore the execution policy. It removes the module links, in the module folders setup found and in the Documents defaults (never what they point to), any `# one-task` profile line left by an older version (and a `profile.ps1` left empty), the `OneTask` scheduled task, restores the previous CurrentUser execution policy if it is still `RemoteSigned`, and deletes `HKCU\Software\OneTask`. Everything in the task folder is kept on purpose; delete the folder yourself if you no longer want your tasks.
 
 ## Known limitations
 
@@ -286,7 +286,7 @@ Run it from the same shell edition that ran `setup` (Windows PowerShell or Power
 - **Undo is one step.** It covers the last change `t` made to your tasks or your routine, and an edit made through `t e` or `t r e`. It does not bring back merged conflict copies or a one-time entry that has arrived. If the files changed in between (a sync, a reminder, a new routine day), it asks first and leaves `done.txt` alone.
 - **Changes from outside:** if `todo.txt` changes while `t` waits for your answer (a sync or a reminder), `t` changes nothing and asks you to run the command again.
 - **The editor blocks the terminal:** `t e` waits until the editor closes, Notepad included.
-- **Several PCs:** run `setup` on each PC. The task folder is stored per PC, and sync apps such as OneDrive do not sync the module links, even when Documents is synced. If you used an older version, its profile line may be shared through a synced Documents folder: running `setup` on one PC removes it there, so `t` is missing on the others until they run `setup`.
+- **Several PCs:** run `setup` on each PC. The task folder is stored per PC, and sync apps such as OneDrive do not sync the module links, even when Documents is synced. If you later move a module folder (for example out of Documents), run `setup` again. If you used an older version, its profile line may be shared through a synced Documents folder: running `setup` on one PC removes it there, so `t` is missing on the others until they run `setup`.
 - **First `t` in a session:** it takes about half a second while PowerShell loads the module; later ones take a few milliseconds.
 - **Google Drive streaming:** in the default streaming mode files are online-only, so the first `t` after a restart can be slow while they download. Mark the task folder "Available offline" to avoid it.
 - **Sync app detection:** only the default locations are found. Pick "Other folder" for anything else.

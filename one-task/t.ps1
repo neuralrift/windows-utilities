@@ -45,7 +45,7 @@ function t {
     $DONE  = Join-Path "$dir\" 'done.txt'
     $docs  = [Environment]::GetFolderPath('MyDocuments')
     $profs = @("$docs\WindowsPowerShell\profile.ps1", "$docs\PowerShell\profile.ps1")
-    $mods  = @("$docs\WindowsPowerShell\Modules\OneTask", "$docs\PowerShell\Modules\OneTask")
+    $docMods = @("$docs\WindowsPowerShell\Modules\OneTask", "$docs\PowerShell\Modules\OneTask")   # the default; see $modsOf
     $key   = 'HKCU:\Software\OneTask'
     $now   = if ($OneTaskNow) { [datetime]$OneTaskNow } else { Get-Date }   # $OneTaskNow fakes the clock in tests
     $day   = $now.ToString('yyyy-MM-dd')
@@ -344,6 +344,20 @@ function t {
 
     # The folder a link points to, or the path itself
     $realDir = { param($p) $i = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; if ($i -and $i.LinkType -eq 'Junction') { "$(@($i.Target)[0])" } else { "$p" } }
+    # The module link of each edition, in the folder it loads user modules from. A profile or powershell.config.json
+    # can move that folder out of Documents, so each edition is asked with its profile loaded; the last line counts,
+    # in case the profile prints something. Falls back to the Documents path when the call fails, and for PowerShell 7
+    # when it is not installed (skipped if Documents\PowerShell is missing too). Starts PowerShell: setup and uninstall only.
+    $modsOf = {
+        $exes = @('powershell.exe', 'pwsh')
+        for ($i = 0; $i -lt 2; $i++) {
+            $p = ''
+            if (Get-Command $exes[$i] -CommandType Application -ErrorAction SilentlyContinue) {
+                try { $p = "$(@(& $exes[$i] -NoLogo -NonInteractive -Command '$env:PSModulePath.Split([char]59)[0]' 2>$null | Where-Object { "$_".Trim() })[-1])".Trim() } catch { }
+            } elseif ($i -eq 1 -and -not (Test-Path (Split-Path (Split-Path $docMods[1])))) { continue }
+            if ($p -and [IO.Path]::IsPathRooted($p)) { Join-Path $p 'OneTask' } else { $docMods[$i] }
+        }
+    }
     # Removes a module link, never what it points to. A link in a OneDrive folder can be read-only, which makes
     # the delete fail, so that flag is cleared on the link first. Says why when it cannot; $true when removed.
     $unlink = {
@@ -1015,12 +1029,11 @@ function t {
 
             Set-ItemProperty $key Folder $target
 
-            # t is a module: a link in each edition's Documents\...\Modules to this folder, so PowerShell loads it the
-            # first time t is typed and a new terminal costs nothing. Edits in this folder reach new sessions.
+            # t is a module: a link to this folder in each edition's user module folder ($modsOf), so PowerShell loads
+            # it the first time t is typed and a new terminal costs nothing. Edits in this folder reach new sessions.
             $src = (& $realDir (Split-Path $OneTaskScript)).TrimEnd('\')
-            $hasPwsh = [bool](Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue)
+            $mods = @(& $modsOf)
             foreach ($m in $mods) {
-                if ($m -eq $mods[1] -and -not $hasPwsh -and -not (Test-Path (Split-Path (Split-Path $m)))) { continue }
                 $item = Get-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue
                 if ($item -and $item.LinkType -ne 'Junction') { & $say "$m exists and is not a link; remove it, then run setup again." Yellow; continue }
                 if ($item -and "$(& $realDir $m)".TrimEnd('\') -eq $src) { & $say "Module: $m"; continue }
@@ -1028,6 +1041,12 @@ function t {
                 New-Item (Split-Path $m) -ItemType Directory -Force | Out-Null
                 New-Item -ItemType Junction -Path $m -Target $src | Out-Null
                 & $say "Module: $m -> $src"
+            }
+            # A link left in Documents\...\Modules after the module folder moved; only a link is removed
+            foreach ($m in $docMods) {
+                if ($mods -contains $m) { continue }
+                $item = Get-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue
+                if ($item -and $item.LinkType -eq 'Junction' -and (& $unlink $m)) { & $say "Removed the old module link $m" }
             }
             # Older versions loaded t from the profile; such a line would hide the module
             foreach ($p in $profs) { if (& $unprofile $p) { & $say "Removed the old one-task line from $p" } }
@@ -1055,7 +1074,7 @@ function t {
             return
         }
         'uninstall' {
-            foreach ($m in $mods) {
+            foreach ($m in @(@(& $modsOf) + $docMods | Select-Object -Unique)) {
                 $item = Get-Item -LiteralPath $m -Force -ErrorAction SilentlyContinue
                 if ($item -and $item.LinkType -eq 'Junction') { if (& $unlink $m) { & $say "Module link removed: $m" } }
                 elseif ($item) { & $say "$m is not a link; left as it is." Yellow }
